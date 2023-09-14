@@ -29,20 +29,20 @@ pub enum Operation {
 }
 
 #[derive(Debug)]
-pub enum Node {
+pub enum Expression {
     Name(String),
     Container(Container),
     Operation(Operation)
 }
 
-pub fn parse(token: Token, tree: &mut Graph<Node, ()>, mut root: NodeIndex) -> NodeIndex {
-    fn add_branch(node: Node, tree: &mut Graph<Node, ()>, root: NodeIndex) -> NodeIndex {
-        let index = tree.add_node(node);
+pub fn parse(token: Token, tree: &mut Graph<Expression, ()>, mut root: NodeIndex) -> NodeIndex {
+    fn add_branch(expression: Expression, tree: &mut Graph<Expression, ()>, root: NodeIndex) -> NodeIndex {
+        let index = tree.add_node(expression);
         tree.add_edge(root, index, ());
         return index;
     }
 
-    fn parent(tree: &mut Graph<Node, ()>, index: NodeIndex) -> NodeIndex {
+    fn parent(tree: &mut Graph<Expression, ()>, index: NodeIndex) -> NodeIndex {
         let edge = tree.first_edge(index, Direction::Incoming)
                                   .expect("Should have parent");
 
@@ -51,7 +51,7 @@ pub fn parse(token: Token, tree: &mut Graph<Node, ()>, mut root: NodeIndex) -> N
                    .expect("Expect parent node").0;
     }
 
-    fn add_fork_leaf(node: Node, tree: &mut Graph<Node, ()>, index: NodeIndex) -> NodeIndex {
+    fn add_fork_leaf(expression: Expression, tree: &mut Graph<Expression, ()>, index: NodeIndex) -> NodeIndex {
         // find leaf
         // println!("Finding edge connected to {:?}", index);
         let edge = tree.first_edge(index, Direction::Outgoing)
@@ -65,7 +65,7 @@ pub fn parse(token: Token, tree: &mut Graph<Node, ()>, mut root: NodeIndex) -> N
         tree.remove_edge(edge)
             .expect("Should remove");
 
-        let parent_index = add_branch(node, tree, index);
+        let parent_index = add_branch(expression, tree, index);
         tree.add_edge(parent_index, leaf_index, ());
 
         return parent_index;
@@ -74,15 +74,15 @@ pub fn parse(token: Token, tree: &mut Graph<Node, ()>, mut root: NodeIndex) -> N
     let mut special_root: Option<NodeIndex> = None;
 
     macro_rules! branch {
-        ($node: expr) => {{
+        ($expression: expr) => {{
             special_root = None;
-            add_branch($node, tree, root)
+            add_branch($expression, tree, root)
         }}
     }
 
     macro_rules! leaf {
-        ($node: expr) => {{
-            add_branch($node, tree, root);
+        ($expression: expr) => {{
+            add_branch($expression, tree, root);
             root
         }}
     }
@@ -94,15 +94,15 @@ pub fn parse(token: Token, tree: &mut Graph<Node, ()>, mut root: NodeIndex) -> N
     }
 
     macro_rules! fork_leaf {
-        ($node: expr) => {{
-            add_fork_leaf($node, tree, root)
+        ($expression: expr) => {{
+            add_fork_leaf($expression, tree, root)
         }}
     }
 
     // Close operations
-    let node = tree.node_weight(root).expect("S");
-    match node {
-        Node::Operation(_) => {
+    let expression = tree.node_weight(root).expect("S");
+    match expression {
+        Expression::Operation(_) => {
             println!("Closed operation");
             special_root = Some(close_branch!());
         }
@@ -110,13 +110,13 @@ pub fn parse(token: Token, tree: &mut Graph<Node, ()>, mut root: NodeIndex) -> N
     }
 
     root = match token {
-        Token::Name(name) => {leaf!(Node::Name(name))},
-        Token::Special(SpecialCharacter::Alias) => {fork_leaf!(Node::Operation(Operation::Alias))}
-        Token::Special(SpecialCharacter::Bind) => {fork_leaf!(Node::Operation(Operation::Bind))}
-        Token::Special(SpecialCharacter::Apply) => {fork_leaf!(Node::Operation(Operation::Apply))}
-        Token::Special(SpecialCharacter::Match) => {fork_leaf!(Node::Operation(Operation::Match))}
-        Token::Special(SpecialCharacter::StartList) => {branch!(Node::Container(Container::List))}
-        Token::Special(SpecialCharacter::StartSet) => {branch!(Node::Container(Container::Set))}
+        Token::Name(name) => {leaf!(Expression::Name(name))},
+        Token::Special(SpecialCharacter::Alias) => {fork_leaf!(Expression::Operation(Operation::Alias))}
+        Token::Special(SpecialCharacter::Bind) => {fork_leaf!(Expression::Operation(Operation::Bind))}
+        Token::Special(SpecialCharacter::Apply) => {fork_leaf!(Expression::Operation(Operation::Apply))}
+        Token::Special(SpecialCharacter::Match) => {fork_leaf!(Expression::Operation(Operation::Match))}
+        Token::Special(SpecialCharacter::StartList) => {branch!(Expression::Container(Container::List))}
+        Token::Special(SpecialCharacter::StartSet) => {branch!(Expression::Container(Container::Set))}
         Token::Special(SpecialCharacter::EndList) => {close_branch!()}
         Token::Special(SpecialCharacter::EndSet) => {close_branch!()}
     };
@@ -135,13 +135,13 @@ mod tests {
     use futures_util::pin_mut;
     use futures_util::stream::StreamExt;
 
-    async fn text_tree(text: String) -> Graph<Node, ()> {
+    async fn text_tree(text: String) -> Graph<Expression, ()> {
         let stream = tokio_stream::iter(text.chars());
         let tokens = lex(stream);
         pin_mut!(tokens);
 
-        let mut tree = Graph::<Node, ()>::new();
-        let root = tree.add_node(Node::Container(Container::Set));
+        let mut tree = Graph::<Expression, ()>::new();
+        let root = tree.add_node(Expression::Container(Container::Set));
         let mut subroot = root;
 
         while let Some(token) = tokens.next().await {
@@ -150,10 +150,10 @@ mod tests {
         return tree;
     }
 
-    fn make_tree(nodes: Vec<Node>, edges: Vec<(usize, usize)>) -> Graph<Node, ()> {
-        let mut tree: Graph<Node, ()> = Graph::<Node, ()>::new();
-        for node in nodes {
-            tree.add_node(node);
+    fn make_tree(expressions: Vec<Expression>, edges: Vec<(usize, usize)>) -> Graph<Expression, ()> {
+        let mut tree: Graph<Expression, ()> = Graph::<Expression, ()>::new();
+        for expression in expressions {
+            tree.add_node(expression);
         }
 
         for edge in edges {
@@ -163,14 +163,14 @@ mod tests {
     }
 
     macro_rules! assert_tree_eq {
-        ($txt: expr, $nodes: expr, $edges: expr) => {
+        ($txt: expr, $expressions: expr, $edges: expr) => {
             assert_eq!(
                 format!("{:?}", Dot::with_config(
                     &text_tree($txt.to_string()).await,
                     &[Config::GraphContentOnly]
                 )),
                 format!("{:?}", Dot::with_config(
-                    &make_tree($nodes, $edges),
+                    &make_tree($expressions, $edges),
                     &[Config::GraphContentOnly]
                 )),
             )
@@ -179,12 +179,12 @@ mod tests {
 
     #[tokio::test]
     async fn it_parses_empty() {
-        let mut tree: Graph<Node, ()> = Graph::<Node, ()>::new();
-        tree.add_node(Node::Container(Container::Set));
+        let mut tree: Graph<Expression, ()> = Graph::<Expression, ()>::new();
+        tree.add_node(Expression::Container(Container::Set));
 
         assert_tree_eq!(
             "",
-            vec![Node::Container(Container::Set)],
+            vec![Expression::Container(Container::Set)],
             vec![]
         )
     }
@@ -194,8 +194,8 @@ mod tests {
         assert_tree_eq!(
             "a",
             vec![
-                Node::Container(Container::Set),
-                Node::Name("a".to_string())
+                Expression::Container(Container::Set),
+                Expression::Name("a".to_string())
             ],
             vec![
                 (0, 1)
@@ -208,10 +208,10 @@ mod tests {
         assert_tree_eq!(
             "{a b}",
             vec![
-                Node::Container(Container::Set),
-                Node::Container(Container::Set),
-                Node::Name("a".to_string()),
-                Node::Name("b".to_string())
+                Expression::Container(Container::Set),
+                Expression::Container(Container::Set),
+                Expression::Name("a".to_string()),
+                Expression::Name("b".to_string())
             ],
             vec![
                 (0, 1),
@@ -226,10 +226,10 @@ mod tests {
         assert_tree_eq!(
             "a:b",
             vec![
-                Node::Container(Container::Set),
-                Node::Name("a".to_string()),
-                Node::Operation(Operation::Bind),
-                Node::Name("b".to_string())
+                Expression::Container(Container::Set),
+                Expression::Name("a".to_string()),
+                Expression::Operation(Operation::Bind),
+                Expression::Name("b".to_string())
             ],
             vec![
                 (0, 2),
@@ -244,12 +244,12 @@ mod tests {
         assert_tree_eq!(
             "{a}:{b}",
             vec![
-                Node::Container(Container::Set),
-                Node::Container(Container::Set),
-                Node::Name("a".to_string()),
-                Node::Operation(Operation::Bind),
-                Node::Container(Container::Set),
-                Node::Name("b".to_string())
+                Expression::Container(Container::Set),
+                Expression::Container(Container::Set),
+                Expression::Name("a".to_string()),
+                Expression::Operation(Operation::Bind),
+                Expression::Container(Container::Set),
+                Expression::Name("b".to_string())
             ],
             vec![
                 (1, 2),

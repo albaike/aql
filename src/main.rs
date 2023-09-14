@@ -7,7 +7,7 @@ use crate::lex::lex;
 mod lex;
 
 use crate::parse::Container;
-use crate::parse::Node;
+use crate::parse::Expression;
 use crate::parse::parse;
 mod parse;
 
@@ -176,8 +176,8 @@ async fn main() {
     let stream = tokio_stream::iter("{x=y}:{x}:M".chars());
     // let stream = tokio_stream::iter("a.b c".chars());
 
-    let mut tree = Graph::<Node, ()>::new();
-    let root = tree.add_node(Node::Container(Container::Set));
+    let mut tree = Graph::<Expression, ()>::new();
+    let root = tree.add_node(Expression::Container(Container::Set));
     let mut subroot = root;
 
     let tokens = lex(stream);
