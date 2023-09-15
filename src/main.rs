@@ -1,14 +1,13 @@
 use futures_util::pin_mut;
 use futures_util::stream::StreamExt;
-use petgraph::Graph;
+use petgraph::graph::NodeIndex;
 use petgraph::dot::{Dot, Config};
 
 use crate::lex::lex;
 mod lex;
 
-use crate::parse::Container;
 use crate::parse::Expression;
-use crate::parse::parse;
+use crate::parse::ExpressionTrait;
 mod parse;
 
 // parser
@@ -176,16 +175,14 @@ async fn main() {
     let stream = tokio_stream::iter("{x=y}:{x}:M".chars());
     // let stream = tokio_stream::iter("a.b c".chars());
 
-    let mut tree = Graph::<Expression, ()>::new();
-    let root = tree.add_node(Expression::Container(Container::Set));
-    let mut subroot = root;
+    let mut expr = Expression::new();
+    let mut subroot = NodeIndex::new(0);
 
     let tokens = lex(stream);
     pin_mut!(tokens);
     while let Some(token) = tokens.next().await {
         print!("{:?}", token);
-        subroot = parse(token, &mut tree, subroot);
-        println!(" {:?} :\n{:?}", subroot, Dot::with_config(&tree, &[Config::GraphContentOnly]));
+        subroot = expr.parse(token, subroot);
+        println!(" {:?} :\n{:?}", subroot, Dot::with_config(&expr.tree, &[Config::GraphContentOnly]));
     }
-
 }

@@ -3,120 +3,186 @@ use petgraph::Direction;
 use petgraph::graph::NodeIndex;
 use crate::lex::Token;
 use crate::lex::SpecialCharacter;
-// mod lex;
 
-/// Container types.
+/// # Container
 /// 
 /// These types will be implemented in the interpreter.
-/// All types are fixed by default.
+/// All types are immutable by default.
+/// 
+/// ## Formal Grammar
+/// 
+/// [`<container>`](#container) `::= <set> | <list>`
 #[derive(Debug)]
 pub enum Container {
-    /// A set of unique items
+    /// A group of unique expressions
+    /// 
+    /// ## Formal Grammar
+    /// 
+    /// [`<set>`](#variant.Set) `::=` [`'{'`](../lex/enum.SpecialCharacter.html#variant.StartSet) `(` [`<expression>`](./enum.Expression.html) `)*` [`'}'`](../lex/enum.SpecialCharacter.html#variant.EndSet)`
     Set,
-    /// An ordered list of items
+    /// An ordered group of expressions
+    /// 
+    /// ## Formal Grammar
+    /// 
+    /// [`<list>`](#variant.List) `::=` [`'('`](../lex/enum.SpecialCharacter.html#variant.StartList) `(` [`<expression>`](./enum.Expression.html) `)*` [`')'`](../lex/enum.SpecialCharacter.html#variant.EndList)`
     List
 }
 
+/// # Operand
+/// ## Formal Grammar
+/// `<operation> ::=` [`<expression>`](./enum.Expression.html) `<operand>` [`<expression>`](./enum.Expression.html)
+/// 
+/// [`<operand>`](#) ::=` [`<alias>`](#variant.Alias) `|` [`<bind>`](#variant.Bind) `|` [`<apply>`](#variant.Apply) `|` [`<match>`](#variant.Match)
 #[derive(Debug)]
-pub enum Operation {
+pub enum Operand {
     /// Assign the right operand (value) to the left operand (name) within that namespace
+    /// 
+    /// [Formal Grammar](../lex/enum.SpecialCharacter.html#variant.Alias)
     Alias,
     /// Assign the right operand (function) to the left operand (variables)
+    /// 
+    /// [Formal Grammar](../lex/enum.SpecialCharacter.html#variant.Bind)
     Bind,
-    /// Substitute the values of the left operand (arguments) to the right operand (functio)
+    /// Substitute the values of the left operand (arguments) to the right operand (function)
+    /// 
+    /// [Formal Grammar](../lex/enum.SpecialCharacter.html#variant.Apply)
     Apply,
+    /// [Formal Grammar](../lex/enum.SpecialCharacter.html#variant.Match)
     Match,
 }
 
+/// # Expression
+/// ## Formal Grammar
+/// [`<expression>`](#) `::= <clause> (<seperator> <clause>)*`
+/// 
+/// `<separator> ::= (' ' | '\t' | '\n' | '\r' | ',')+`
+/// 
+/// `<clause> ::=` [`<name>`](#variant.Name) `|` [`<operation>`](#variant.Operation) `|` [`<container>`](#variant.Container)
+///
 #[derive(Debug)]
-pub enum Expression {
+pub enum Node {
+    /// ## Formal Grammar
+    /// [`<name>`](#variant.Name) `::= ( <letter> | <number> | '_' )+`
     Name(String),
+    Operand(Operand),
     Container(Container),
-    Operation(Operation)
 }
 
-pub fn parse(token: Token, tree: &mut Graph<Expression, ()>, mut root: NodeIndex) -> NodeIndex {
-    fn add_branch(expression: Expression, tree: &mut Graph<Expression, ()>, root: NodeIndex) -> NodeIndex {
-        let index = tree.add_node(expression);
-        tree.add_edge(root, index, ());
+pub struct Expression {
+    pub tree: Graph<Node, ()>
+}
+
+trait ExpressionTree {
+    fn parent(self: &Self, index: NodeIndex) -> Option<NodeIndex>;
+    fn add_node(self: &mut Self, node: Node, parent: NodeIndex) -> NodeIndex;
+    fn add_fork(self: &mut Self, node: Node, parent: NodeIndex) -> NodeIndex;
+}
+
+impl ExpressionTree for Expression {
+    fn parent(self: &Self, index: NodeIndex) -> Option<NodeIndex> {
+        let edge = self.tree.first_edge(index, Direction::Incoming);
+
+        return match edge {
+            Some(e) => {
+                let points = self.tree.edge_endpoints(e);
+                return match points {
+                    Some(p) => Some(p.0),
+                    _ => None
+                }
+            },
+            _ => None
+        }
+    }
+
+    fn add_node(self: &mut Self, node: Node, parent: NodeIndex) -> NodeIndex {
+        let index = self.tree.add_node(node);
+        self.tree.add_edge(parent, index, ());
         return index;
     }
 
-    fn parent(tree: &mut Graph<Expression, ()>, index: NodeIndex) -> NodeIndex {
-        let edge = tree.first_edge(index, Direction::Incoming)
-                                  .expect("Should have parent");
-
-        // Will crash on malformed token sequence
-        return tree.edge_endpoints(edge)
-                   .expect("Expect parent node").0;
-    }
-
-    fn add_fork_leaf(expression: Expression, tree: &mut Graph<Expression, ()>, index: NodeIndex) -> NodeIndex {
+    fn add_fork(self: &mut Self, node: Node, index: NodeIndex) -> NodeIndex {
         // find leaf
         // println!("Finding edge connected to {:?}", index);
-        let edge = tree.first_edge(index, Direction::Outgoing)
+        let edge = self.tree.first_edge(index, Direction::Outgoing)
                                   .expect("Root node not connected");
 
         // println!("Finding node at the end of {:?}", edge);
-        let leaf_index = tree.edge_endpoints(edge)
+        let leaf_index = self.tree.edge_endpoints(edge)
                                             .expect("Root edge not found").1;
 
         // println!("Removing edge {:?}", edge);
-        tree.remove_edge(edge)
+        self.tree.remove_edge(edge)
             .expect("Should remove");
 
-        let parent_index = add_branch(expression, tree, index);
-        tree.add_edge(parent_index, leaf_index, ());
+        let parent_index = self.add_node(node, index);
+        self.tree.add_edge(parent_index, leaf_index, ());
 
         return parent_index;
     }
 
+}
+
+pub trait ExpressionTrait {
+    fn new () -> Self;
+    fn parse(self: &mut Self, token: Token, root: NodeIndex) -> NodeIndex;
+}
+
+impl ExpressionTrait for Expression {
+    fn new () -> Expression {
+        let mut tree = Graph::<Node, ()>::new();
+        tree.add_node(Node::Container(Container::Set));
+        return Expression {
+            tree
+        }
+    }
+
+    fn parse(self: &mut Self, token: Token, mut root: NodeIndex) -> NodeIndex {
     let mut special_root: Option<NodeIndex> = None;
 
     macro_rules! branch {
-        ($expression: expr) => {{
+            ($node: expr) => {{
             special_root = None;
-            add_branch($expression, tree, root)
+                self.add_node($node, root)
         }}
     }
 
     macro_rules! leaf {
-        ($expression: expr) => {{
-            add_branch($expression, tree, root);
+            ($node: expr) => {{
+                self.add_node($node, root);
             root
         }}
     }
 
     macro_rules! close_branch {
         () => {{
-            parent(tree, root)
+                self.parent(root)
+                    .expect("Open branch should have a parent")
         }}
     }
 
     macro_rules! fork_leaf {
-        ($expression: expr) => {{
-            add_fork_leaf($expression, tree, root)
+            ($node: expr) => {{
+                self.add_fork($node, root)
         }}
     }
 
     // Close operations
-    let expression = tree.node_weight(root).expect("S");
-    match expression {
-        Expression::Operation(_) => {
-            println!("Closed operation");
+        let node = self.tree.node_weight(root).expect("S");
+        match node {
+            Node::Operand(_) => {
             special_root = Some(close_branch!());
         }
         _ => ()
     }
 
     root = match token {
-        Token::Name(name) => {leaf!(Expression::Name(name))},
-        Token::Special(SpecialCharacter::Alias) => {fork_leaf!(Expression::Operation(Operation::Alias))}
-        Token::Special(SpecialCharacter::Bind) => {fork_leaf!(Expression::Operation(Operation::Bind))}
-        Token::Special(SpecialCharacter::Apply) => {fork_leaf!(Expression::Operation(Operation::Apply))}
-        Token::Special(SpecialCharacter::Match) => {fork_leaf!(Expression::Operation(Operation::Match))}
-        Token::Special(SpecialCharacter::StartList) => {branch!(Expression::Container(Container::List))}
-        Token::Special(SpecialCharacter::StartSet) => {branch!(Expression::Container(Container::Set))}
+            Token::Name(name) => {leaf!(Node::Name(name))},
+            Token::Special(SpecialCharacter::Alias) => {fork_leaf!(Node::Operand(Operand::Alias))}
+            Token::Special(SpecialCharacter::Bind) => {fork_leaf!(Node::Operand(Operand::Bind))}
+            Token::Special(SpecialCharacter::Apply) => {fork_leaf!(Node::Operand(Operand::Apply))}
+            Token::Special(SpecialCharacter::Match) => {fork_leaf!(Node::Operand(Operand::Match))}
+            Token::Special(SpecialCharacter::StartList) => {branch!(Node::Container(Container::List))}
+            Token::Special(SpecialCharacter::StartSet) => {branch!(Node::Container(Container::Set))}
         Token::Special(SpecialCharacter::EndList) => {close_branch!()}
         Token::Special(SpecialCharacter::EndSet) => {close_branch!()}
     };
@@ -125,6 +191,7 @@ pub fn parse(token: Token, tree: &mut Graph<Expression, ()>, mut root: NodeIndex
         Some(r) => r,
         _ => root
     }
+}
 }
 
 #[cfg(test)]
@@ -135,25 +202,24 @@ mod tests {
     use futures_util::pin_mut;
     use futures_util::stream::StreamExt;
 
-    async fn text_tree(text: String) -> Graph<Expression, ()> {
+    async fn text_tree(text: String) -> Graph<Node, ()> {
         let stream = tokio_stream::iter(text.chars());
         let tokens = lex(stream);
         pin_mut!(tokens);
 
-        let mut tree = Graph::<Expression, ()>::new();
-        let root = tree.add_node(Expression::Container(Container::Set));
-        let mut subroot = root;
+        let mut expression = Expression::new();
+        let mut subroot = NodeIndex::new(0);
 
         while let Some(token) = tokens.next().await {
-            subroot = parse(token, &mut tree, subroot);
+            subroot = expression.parse(token, subroot);
         }
-        return tree;
+        return expression.tree;
     }
 
-    fn make_tree(expressions: Vec<Expression>, edges: Vec<(usize, usize)>) -> Graph<Expression, ()> {
-        let mut tree: Graph<Expression, ()> = Graph::<Expression, ()>::new();
-        for expression in expressions {
-            tree.add_node(expression);
+    fn make_tree(nodes: Vec<Node>, edges: Vec<(usize, usize)>) -> Graph<Node, ()> {
+        let mut tree= Graph::<Node, ()>::new();
+        for node in nodes {
+            tree.add_node(node);
         }
 
         for edge in edges {
@@ -177,14 +243,15 @@ mod tests {
         }
     }
 
+
     #[tokio::test]
     async fn it_parses_empty() {
-        let mut tree: Graph<Expression, ()> = Graph::<Expression, ()>::new();
-        tree.add_node(Expression::Container(Container::Set));
+        let mut tree: Graph<Node, ()> = Graph::<Node, ()>::new();
+        tree.add_node(Node::Container(Container::Set));
 
         assert_tree_eq!(
             "",
-            vec![Expression::Container(Container::Set)],
+            vec![Node::Container(Container::Set)],
             vec![]
         )
     }
@@ -194,8 +261,8 @@ mod tests {
         assert_tree_eq!(
             "a",
             vec![
-                Expression::Container(Container::Set),
-                Expression::Name("a".to_string())
+                Node::Container(Container::Set),
+                Node::Name("a".to_string())
             ],
             vec![
                 (0, 1)
@@ -208,10 +275,10 @@ mod tests {
         assert_tree_eq!(
             "{a b}",
             vec![
-                Expression::Container(Container::Set),
-                Expression::Container(Container::Set),
-                Expression::Name("a".to_string()),
-                Expression::Name("b".to_string())
+                Node::Container(Container::Set),
+                Node::Container(Container::Set),
+                Node::Name("a".to_string()),
+                Node::Name("b".to_string())
             ],
             vec![
                 (0, 1),
@@ -226,10 +293,10 @@ mod tests {
         assert_tree_eq!(
             "a:b",
             vec![
-                Expression::Container(Container::Set),
-                Expression::Name("a".to_string()),
-                Expression::Operation(Operation::Bind),
-                Expression::Name("b".to_string())
+                Node::Container(Container::Set),
+                Node::Name("a".to_string()),
+                Node::Operand(Operand::Bind),
+                Node::Name("b".to_string())
             ],
             vec![
                 (0, 2),
@@ -244,12 +311,12 @@ mod tests {
         assert_tree_eq!(
             "{a}:{b}",
             vec![
-                Expression::Container(Container::Set),
-                Expression::Container(Container::Set),
-                Expression::Name("a".to_string()),
-                Expression::Operation(Operation::Bind),
-                Expression::Container(Container::Set),
-                Expression::Name("b".to_string())
+                Node::Container(Container::Set),
+                Node::Container(Container::Set),
+                Node::Name("a".to_string()),
+                Node::Operand(Operand::Bind),
+                Node::Container(Container::Set),
+                Node::Name("b".to_string())
             ],
             vec![
                 (1, 2),
