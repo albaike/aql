@@ -11,7 +11,7 @@ use crate::parse::ExpressionTrait;
 mod parse;
 
 // parser
-
+mod spec;
 
 /// # aql (algebraic query language)
 /// 
