@@ -70,6 +70,7 @@ pub enum Node {
     Name(String),
     Operand(Operand),
     Container(Container),
+    OpenContainer(Container),
 }
 
 #[derive(Debug)]
@@ -79,7 +80,9 @@ pub struct Expression {
 
 trait ExpressionTree {
     fn parent(self: &Self, index: NodeIndex) -> Option<NodeIndex>;
+    fn search_up(self: &Self, node: Node, index: NodeIndex) -> Option<NodeIndex>;
     fn add_node(self: &mut Self, node: Node, parent: NodeIndex) -> NodeIndex;
+    fn replace_node(self: &mut Self, node: Node, index: NodeIndex) -> NodeIndex;
     fn add_fork(self: &mut Self, node: Node, parent: NodeIndex) -> NodeIndex;
 }
 
@@ -99,30 +102,69 @@ impl ExpressionTree for Expression {
         }
     }
 
+    fn search_up(self: &Self, node: Node, index: NodeIndex) -> Option<NodeIndex> {
+        return match self.tree.node_weight(index) {
+            Some(w) => {
+                if *w == node {
+                    Some(index)
+                } else {
+                    match self.parent(index) {
+                        Some(p) => self.search_up(node, p),
+                        _ => None
+                    }
+                }
+            },
+            _ => None
+        }
+    }
+
     fn add_node(self: &mut Self, node: Node, parent: NodeIndex) -> NodeIndex {
         let index = self.tree.add_node(node);
         self.tree.add_edge(parent, index, ());
         return index;
     }
 
+    fn replace_node(self: &mut Self, node: Node, index: NodeIndex) -> NodeIndex {
+        self.tree[index] = node;
+        return index;
+    }
+
     fn add_fork(self: &mut Self, node: Node, index: NodeIndex) -> NodeIndex {
-        // find leaf
-        // println!("Finding edge connected to {:?}", index);
-        let edge = self.tree.first_edge(index, Direction::Outgoing)
-                                  .expect("Root node not connected");
+        let (edge, leaf_index) = match
+            self.tree.node_weight(index)
+                     .expect("Node at index should exist") 
+        {
+            Node::OpenContainer(_) =>  {
+                let edge = self.tree.first_edge(index, Direction::Outgoing)
+                                          .expect("Parent node not connected");
+                (
+                    edge, 
+                    self.tree.edge_endpoints(edge)
+                             .expect("Parent edge not found").1
+                )
+            },
+            _ => {
+                (
+                    self.tree.first_edge(index, Direction::Incoming)
+                             .expect("Parent node not connected"),
+                    index
+                )
+            }
+        };
 
-        // println!("Finding node at the end of {:?}", edge);
-        let leaf_index = self.tree.edge_endpoints(edge)
-                                            .expect("Root edge not found").1;
-
-        // println!("Removing edge {:?}", edge);
+        let parent_index = self.add_node(
+            node,
+            self.tree.edge_endpoints(edge)
+                             .expect("parent edge should be connected")
+                             .0
+        );
         self.tree.remove_edge(edge)
             .expect("Should remove");
 
-        let parent_index = self.add_node(node, index);
         self.tree.add_edge(parent_index, leaf_index, ());
 
         return parent_index;
+        // return leaf_index;
     }
 
 }
@@ -165,62 +207,45 @@ impl ExpressionTrait for Expression {
         }
     }
 
-    fn parse(self: &mut Self, token: Token, mut root: NodeIndex) -> NodeIndex {
-    let mut special_root: Option<NodeIndex> = None;
-
-    macro_rules! branch {
-            ($node: expr) => {{
-            special_root = None;
-                self.add_node($node, root)
-        }}
-    }
-
-    macro_rules! leaf {
-            ($node: expr) => {{
-                self.add_node($node, root);
-            root
-        }}
-    }
-
-    macro_rules! close_branch {
-        () => {{
-                self.parent(root)
-                    .expect("Open branch should have a parent")
-        }}
-    }
-
-    macro_rules! fork_leaf {
-            ($node: expr) => {{
-                self.add_fork($node, root)
-        }}
-    }
-
-    // Close operations
-        let node = self.tree.node_weight(root).expect("S");
-        match node {
-            Node::Operand(_) => {
-            special_root = Some(close_branch!());
+    fn parse(self: &mut Self, token: Token, root: NodeIndex) -> NodeIndex {
+        macro_rules! add_name {
+            ($name: expr) => {{
+                self.add_node(Node::Name($name), root)
+            }}
         }
-        _ => ()
-    }
 
-    root = match token {
-            Token::Name(name) => {leaf!(Node::Name(name))},
-            Token::Special(SpecialCharacter::Alias) => {fork_leaf!(Node::Operand(Operand::Alias))}
-            Token::Special(SpecialCharacter::Bind) => {fork_leaf!(Node::Operand(Operand::Bind))}
-            Token::Special(SpecialCharacter::Apply) => {fork_leaf!(Node::Operand(Operand::Apply))}
-            Token::Special(SpecialCharacter::Match) => {fork_leaf!(Node::Operand(Operand::Match))}
-            Token::Special(SpecialCharacter::StartList) => {branch!(Node::Container(Container::List))}
-            Token::Special(SpecialCharacter::StartSet) => {branch!(Node::Container(Container::Set))}
-        Token::Special(SpecialCharacter::EndList) => {close_branch!()}
-        Token::Special(SpecialCharacter::EndSet) => {close_branch!()}
-    };
+        macro_rules! add_operand {
+            ($operand: expr) => {{
+                self.add_fork(Node::Operand($operand), root)
+            }}
+        }
 
-    return match special_root {
-        Some(r) => r,
-        _ => root
+        macro_rules! open_container {
+            ($node: expr) => {{
+                self.add_node(Node::OpenContainer($node), root)
+            }}
+        }
+
+        macro_rules! close_container {
+            ($container: expr) => {{
+                let parent = self.search_up(Node::OpenContainer($container), root)
+                                 .expect("Open container should have a matching parent");
+                self.replace_node(Node::Container($container), parent)
+            }}
+        }
+
+        return  match token {
+            Token::Name(name) => {add_name!(name)},
+            Token::Special(SpecialCharacter::Alias) => {add_operand!(Operand::Alias)}
+            Token::Special(SpecialCharacter::Bind) => {add_operand!(Operand::Bind)}
+            Token::Special(SpecialCharacter::Apply) => {add_operand!(Operand::Apply)}
+            Token::Special(SpecialCharacter::Match) => {add_operand!(Operand::Match)}
+            Token::Special(SpecialCharacter::StartList) => {open_container!(Container::List)}
+            Token::Special(SpecialCharacter::StartSet) => {open_container!(Container::Set)}
+            Token::Special(SpecialCharacter::EndList) => {close_container!(Container::List)}
+            Token::Special(SpecialCharacter::EndSet) => {close_container!(Container::Set)}
+        };
     }
-}
 }
 
 pub mod util {
@@ -246,6 +271,7 @@ mod tests {
     use super::*;
     use super::util::*;
     use crate::lex::lex;
+    use crate::spec::lambda::*;
     use futures_util::pin_mut;
     use futures_util::stream::StreamExt;
 
@@ -360,5 +386,78 @@ mod tests {
                 (4, 5),
             ]
         )
+    }
+
+    #[tokio::test]
+    async fn it_parses_lambda() {
+        assert_expr_eq!(
+            Identity.text,
+            Identity.parse
+        );
+        assert_expr_eq!(
+            AlphaConversion.text,
+            AlphaConversion.parse
+        );
+        assert_expr_eq!(
+            K.text,
+            K.parse
+        );
+    }
+
+    #[test]
+    fn it_parses_binding() {
+        let mut expr = Expression::new();
+        let mut index = NodeIndex::new(0);
+
+        index = expr.parse(Token::Name("x".to_string()), index);
+        assert_eq!(index, NodeIndex::new(1));
+        assert_eq!(expr.parent(index), Some(NodeIndex::new(0)));
+
+        index = expr.parse(Token::Special(SpecialCharacter::Bind), index);
+        assert_eq!(index, NodeIndex::new(2));
+        assert_eq!(expr.parent(index), Some(NodeIndex::new(0)));
+        assert_eq!(expr.parent(NodeIndex::new(1)), Some(index));
+    }
+
+    #[tokio::test]
+    async fn it_parses_set2() {
+        let mut expr = Expression::new();
+        let mut index = NodeIndex::new(0);
+
+        index = expr.parse(Token::Special(SpecialCharacter::StartSet), index);
+        // println!("{:?}", expr.tree.raw_edges());
+        assert_eq!(index, NodeIndex::new(1));
+        assert_eq!(expr.parent(index), Some(NodeIndex::new(0)));
+        assert_eq!(expr.search_up(Node::OpenContainer(Container::Set), index), Some(index));
+
+        index = expr.parse(Token::Special(SpecialCharacter::EndSet), index);
+        // println!("{:?}", expr.tree.raw_edges());
+        assert_eq!(index, NodeIndex::new(1));
+        assert_eq!(expr.parent(index), Some(NodeIndex::new(0)));
+        assert_eq!(expr.search_up(Node::OpenContainer(Container::Set), index), None);
+
+        index = expr.parse(Token::Special(SpecialCharacter::Alias), index);
+        // println!("{:?}", expr.tree.raw_edges());
+        assert_eq!(index, NodeIndex::new(2));
+        assert_eq!(expr.parent(index), Some(NodeIndex::new(0)));
+        assert_eq!(expr.parent(NodeIndex::new(1)), Some(NodeIndex::new(2)));
+
+        index = expr.parse(Token::Name("a".to_string()), index);
+        assert_eq!(index, NodeIndex::new(3));
+        assert_eq!(expr.parent(index), Some(NodeIndex::new(2)));
+        assert_eq!(expr.parent(NodeIndex::new(1)), Some(NodeIndex::new(2)));
+        assert_eq!(expr.parent(NodeIndex::new(2)), Some(NodeIndex::new(0)));
+
+        index = expr.parse(Token::Special(SpecialCharacter::Alias), index);
+        assert_eq!(index, NodeIndex::new(4));
+        assert_eq!(expr.parent(index), Some(NodeIndex::new(2)));
+        assert_eq!(expr.parent(NodeIndex::new(3)), Some(index));
+        assert_eq!(expr.parent(NodeIndex::new(1)), Some(NodeIndex::new(2)));
+        assert_eq!(expr.parent(NodeIndex::new(2)), Some(NodeIndex::new(0)));
+
+        index = expr.parse(Token::Name("b".to_string()), index);
+        assert_eq!(index, NodeIndex::new(5));
+        assert_eq!(expr.parent(index), Some(NodeIndex::new(4)));
+        println!("{:?}", expr.tree.raw_edges());
     }
 }
