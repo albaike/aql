@@ -1,6 +1,7 @@
 use petgraph::Graph;
 use petgraph::Direction;
 use petgraph::graph::NodeIndex;
+use std::collections::HashSet;
 use crate::lex::Token;
 use crate::lex::SpecialCharacter;
 
@@ -13,6 +14,7 @@ use crate::lex::SpecialCharacter;
 /// 
 /// [`<container>`](#container) `::= <set> | <list>`
 #[derive(Debug)]
+#[derive(PartialEq)]
 pub enum Container {
     /// A group of unique expressions
     /// 
@@ -34,6 +36,7 @@ pub enum Container {
 /// 
 /// [`<operand>`](#) ::=` [`<alias>`](#variant.Alias) `|` [`<bind>`](#variant.Bind) `|` [`<apply>`](#variant.Apply) `|` [`<match>`](#variant.Match)
 #[derive(Debug)]
+#[derive(PartialEq)]
 pub enum Operand {
     /// Assign the right operand (value) to the left operand (name) within that namespace
     /// 
@@ -60,6 +63,7 @@ pub enum Operand {
 /// `<clause> ::=` [`<name>`](#variant.Name) `|` [`<operation>`](#variant.Operation) `|` [`<container>`](#variant.Container)
 ///
 #[derive(Debug)]
+#[derive(PartialEq)]
 pub enum Node {
     /// ## Formal Grammar
     /// [`<name>`](#variant.Name) `::= ( <letter> | <number> | '_' )+`
@@ -68,6 +72,7 @@ pub enum Node {
     Container(Container),
 }
 
+#[derive(Debug)]
 pub struct Expression {
     pub tree: Graph<Node, ()>
 }
@@ -125,6 +130,30 @@ impl ExpressionTree for Expression {
 pub trait ExpressionTrait {
     fn new () -> Self;
     fn parse(self: &mut Self, token: Token, root: NodeIndex) -> NodeIndex;
+}
+
+impl PartialEq for Expression {
+    fn eq(self: &Self, other: &Expression) -> bool {
+        return 
+            self.tree.edge_count() == other.tree.edge_count()
+            && self.tree.node_count() == other.tree.node_count()
+            && {
+                let mut set = HashSet::with_capacity(self.tree.edge_count());
+                for edge in self.tree.raw_edges() {
+                    set.insert((edge.source(), edge.target()));
+                }
+                set
+            } == {
+                let mut set = HashSet::with_capacity(other.tree.edge_count());
+                for edge in self.tree.raw_edges() {
+                    set.insert((edge.source(), edge.target()));
+                }
+                set
+
+            }
+            && self.tree.node_weights().collect::<Vec<&Node>>() == other.tree.node_weights().collect::<Vec<&Node>>();
+    }
+
 }
 
 impl ExpressionTrait for Expression {
@@ -194,15 +223,33 @@ impl ExpressionTrait for Expression {
 }
 }
 
+pub mod util {
+    use super::*;
+    pub fn make_expr(nodes: Vec<Node>, edges: Vec<(usize, usize)>) -> Expression {
+        let mut tree= Graph::<Node, ()>::new();
+        for node in nodes {
+            tree.add_node(node);
+        }
+
+        for edge in edges {
+            tree.add_edge(NodeIndex::new(edge.0), NodeIndex::new(edge.1), ());
+        }
+        return Expression {
+            tree
+        };
+    }
+
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::util::*;
     use crate::lex::lex;
-    use petgraph::dot::{Dot, Config};
     use futures_util::pin_mut;
     use futures_util::stream::StreamExt;
 
-    async fn text_tree(text: String) -> Graph<Node, ()> {
+    async fn text_expr(text: String) -> Expression {
         let stream = tokio_stream::iter(text.chars());
         let tokens = lex(stream);
         pin_mut!(tokens);
@@ -213,36 +260,23 @@ mod tests {
         while let Some(token) = tokens.next().await {
             subroot = expression.parse(token, subroot);
         }
-        return expression.tree;
-    }
-
-    fn make_tree(nodes: Vec<Node>, edges: Vec<(usize, usize)>) -> Graph<Node, ()> {
-        let mut tree= Graph::<Node, ()>::new();
-        for node in nodes {
-            tree.add_node(node);
-        }
-
-        for edge in edges {
-            tree.add_edge(NodeIndex::new(edge.0), NodeIndex::new(edge.1), ());
-        }
-        return tree;
+        return expression;
     }
 
     macro_rules! assert_tree_eq {
-        ($txt: expr, $expressions: expr, $edges: expr) => {
-            assert_eq!(
-                format!("{:?}", Dot::with_config(
-                    &text_tree($txt.to_string()).await,
-                    &[Config::GraphContentOnly]
-                )),
-                format!("{:?}", Dot::with_config(
-                    &make_tree($expressions, $edges),
-                    &[Config::GraphContentOnly]
-                )),
-            )
+        ($txt: expr, $nodes: expr, $edges: expr) => {
+            assert_expr_eq!($txt, make_expr($nodes, $edges))
         }
     }
 
+    macro_rules! assert_expr_eq {
+        ($txt: expr, $expr: expr) => {
+            assert_eq!(
+                text_expr($txt.to_string()).await,
+                $expr
+            )
+        }
+    }
 
     #[tokio::test]
     async fn it_parses_empty() {
