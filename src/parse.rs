@@ -160,16 +160,16 @@ impl Expression {
 }
 
 trait ExpressionTree {
-    fn parent(self: &Self, index: NodeIndex) -> Option<NodeIndex>;
-    fn search_up(self: &Self, node: Node, index: NodeIndex) -> Option<NodeIndex>;
-    fn search_accept(self: &Self, index: NodeIndex) -> NodeIndex;
-    fn add_child(self: &mut Self, node: Node, parent: NodeIndex) -> NodeIndex;
-    fn replace_node(self: &mut Self, node: Node, index: NodeIndex) -> NodeIndex;
-    fn add_fork(self: &mut Self, node: Node, parent: NodeIndex) -> NodeIndex;
+    fn parent(&self, index: NodeIndex) -> Option<NodeIndex>;
+    fn search_up(&self, node: Node, index: NodeIndex) -> Option<NodeIndex>;
+    fn search_accept(&self, index: NodeIndex) -> NodeIndex;
+    fn add_child(&mut self, node: Node, parent: NodeIndex) -> NodeIndex;
+    fn replace_node(&mut self, node: Node, index: NodeIndex) -> NodeIndex;
+    fn add_fork(&mut self, node: Node, parent: NodeIndex) -> NodeIndex;
 }
 
 impl ExpressionTree for Expression {
-    fn parent(self: &Self, index: NodeIndex) -> Option<NodeIndex> {
+    fn parent(&self, index: NodeIndex) -> Option<NodeIndex> {
         let edge = self.tree.first_edge(index, Direction::Incoming);
 
         return match edge {
@@ -269,7 +269,7 @@ impl ExpressionTree for Expression {
 impl PartialEq for Expression {
     // FIXME repacing edges with (Node, Node)
     // Placing edges in tree order
-    fn eq(self: &Self, other: &Expression) -> bool {
+    fn eq(&self, other: &Expression) -> bool {
         return 
             self.tree.edge_count() == other.tree.edge_count()
             && self.tree.node_count() == other.tree.node_count()
