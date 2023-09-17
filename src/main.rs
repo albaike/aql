@@ -5,11 +5,11 @@ use petgraph::graph::NodeIndex;
 use tokio::io::AsyncBufReadExt;
 use crate::lex::ToTokens;
 use crate::parse::Expression;
-// use crate::engine as Entity;
+use crate::engine as Entity;
 
 pub mod lex;
 pub mod parse;
-// pub mod engine;
+pub mod engine;
 pub mod spec;
 
 /// # aql (algebraic query language)
@@ -178,8 +178,6 @@ async fn main() {
     let text = String::from_utf8(buffer).expect("ok");
     let expr = Expression::from(&text.to_tokens());
 
-    println!("{}", expr.to_string());
-
-    // let entity = Entity::read(&expr, NodeIndex::new(0)).expect("Should produce an entity");
-    // println!("{}", entity.to_string());
+    let entity = Entity::read(&expr, NodeIndex::new(0)).expect("Should produce an entity");
+    println!("{}", entity.to_string());
 }
