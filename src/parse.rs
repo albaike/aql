@@ -95,7 +95,7 @@ impl Expression {
         }
     }
 
-    pub fn parse_token(self: &mut Self, token: &Token, root: NodeIndex) -> NodeIndex {
+    fn parse_token(self: &mut Self, token: &Token, root: NodeIndex) -> NodeIndex {
         macro_rules! add_name {
             ($name: expr) => {{
                 self.add_child(
@@ -312,6 +312,7 @@ impl From<&Vec<Token>> for Expression {
         for token in tokens.iter() {
             index = expr.parse_token(&token, index);
         }
+        expr.parse_token(&Token::Special(SpecialCharacter::EndSet), index);
         return expr;
     }
 }
@@ -441,7 +442,7 @@ mod tests {
     fn it_parses_empty() {
         test_expr!(
             (vec![] as Vec<Token>),
-            &vec![Node::OpenContainer(Container::Set)],
+            &vec![Node::Container(Container::Set)],
             &vec![]
         );
     }
@@ -451,7 +452,7 @@ mod tests {
         test_expr!(
             vec![Token::Name(String::from("a"))],
             &vec![
-                Node::OpenContainer(Container::Set),
+                Node::Container(Container::Set),
                 Node::Name(String::from("a"))
             ],
             &vec![
@@ -470,7 +471,7 @@ mod tests {
                 Token::Special(SpecialCharacter::EndSet),
             ],
             &vec![
-                Node::OpenContainer(Container::Set),
+                Node::Container(Container::Set),
                 Node::Container(Container::Set),
                 Node::Name(String::from("a")),
                 Node::Name(String::from("b"))
@@ -532,7 +533,7 @@ mod tests {
                 Token::Special(SpecialCharacter::EndSet),
             ],
             &vec![
-                Node::OpenContainer(Container::Set),
+                Node::Container(Container::Set),
                 Node::Container(Container::Set),
                 Node::Name(String::from("a")),
                 Node::Operand(Operand::Bind),
@@ -607,7 +608,7 @@ mod tests {
                 Token::Name(String::from("b")),
             ],
             &vec![
-                Node::OpenContainer(Container::Set),
+                Node::Container(Container::Set),
                 Node::Name(String::from("a")),
                 Node::Name(String::from("b"))
             ],

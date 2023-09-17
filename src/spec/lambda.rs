@@ -32,7 +32,7 @@ static IDENTITY: LazyLock<Lambda> = lazy!(Lambda {
         Token::Name(String::from("x")),
     ],
     parse_nodes: vec![
-        Node::OpenContainer(Container::Set),
+        Node::Container(Container::Set),
         Node::Name(String::from("x")),
         Node::Operand(Operand::Bind),
         Node::Name(String::from("x")),
@@ -54,7 +54,7 @@ static BINDING: LazyLock<Lambda> = lazy!(Lambda {
         Token::Name("M".to_string()),
     ],
     parse_nodes: vec![
-        Node::OpenContainer(Container::Set),
+        Node::Container(Container::Set),
         Node::Name("x".to_string()),
         Node::Operand(Operand::Bind),
         Node::Name("M".to_string())
@@ -82,7 +82,7 @@ static ALPHA_CONVERSION: LazyLock<Lambda> = lazy!(Lambda {
         Token::Name("M".to_string()),
     ],
     parse_nodes: vec![
-        Node::OpenContainer(Container::Set),
+        Node::Container(Container::Set),
         Node::Container(Container::Set),
         Node::Name("x".to_string()),
         Node::Operand(Operand::Alias),
@@ -116,7 +116,7 @@ static K: LazyLock<Lambda> = lazy!(Lambda {
         Token::Name("x".to_string()),
     ],
     parse_nodes: vec![
-        Node::OpenContainer(Container::Set),
+        Node::Container(Container::Set),
         Node::Name("x".to_string()),
         Node::Operand(Operand::Bind),
         Node::Name("y".to_string()),
