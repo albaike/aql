@@ -153,7 +153,7 @@ impl Expression {
         let node = expr.tree.node_weight(expr_index).expect("Should have a node at index");
         index = self.add_child(node.clone(), index);
         for child in expr.children(expr_index) {
-            index = self.add_expression(expr, index, child);
+            self.add_expression(expr, index, child);
         }
         return index;
     }
