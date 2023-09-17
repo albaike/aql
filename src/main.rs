@@ -1,17 +1,16 @@
-use futures_util::pin_mut;
-use futures_util::stream::StreamExt;
+#![feature(return_position_impl_trait_in_trait)]
+#![feature(lazy_cell)]
+
 use petgraph::graph::NodeIndex;
-use petgraph::dot::{Dot, Config};
-
-use crate::lex::lex;
-mod lex;
-
+use tokio::io::AsyncBufReadExt;
+use crate::lex::ToTokens;
 use crate::parse::Expression;
-use crate::parse::ExpressionTrait;
-mod parse;
+// use crate::engine as Entity;
 
-// parser
-mod spec;
+pub mod lex;
+pub mod parse;
+// pub mod engine;
+pub mod spec;
 
 /// # aql (algebraic query language)
 /// 
@@ -169,20 +168,18 @@ mod spec;
 /// 
 /// <br/>
 ///
+/// 
+/// 
 #[tokio::main]
 async fn main() {
-    // let stream = tokio_stream::iter("f:x:x.f".chars());
-    let stream = tokio_stream::iter("{x=y}:{x}:M".chars());
-    // let stream = tokio_stream::iter("a.b c".chars());
+    let mut reader = tokio::io::BufReader::new(tokio::io::stdin());
+    let mut buffer = Vec::new();
+    let _ = reader.read_until(b'\n', &mut buffer).await;
+    let text = String::from_utf8(buffer).expect("ok");
+    let expr = Expression::from(&text.to_tokens());
 
-    let mut expr = Expression::new();
-    let mut subroot = NodeIndex::new(0);
+    println!("{}", expr.to_string());
 
-    let tokens = lex(stream);
-    pin_mut!(tokens);
-    while let Some(token) = tokens.next().await {
-        print!("{:?}", token);
-        subroot = expr.parse(token, subroot);
-        println!(" {:?} :\n{:?}", subroot, Dot::with_config(&expr.tree, &[Config::GraphContentOnly]));
-    }
+    // let entity = Entity::read(&expr, NodeIndex::new(0)).expect("Should produce an entity");
+    // println!("{}", entity.to_string());
 }

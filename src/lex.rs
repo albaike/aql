@@ -1,22 +1,21 @@
-use tokio_stream::Iter;
-use futures_util::stream::StreamExt;
-use async_stream::stream;
-use futures_core::stream::Stream;
-use std::str::Chars;
+use strum::IntoEnumIterator;
+use strum_macros::EnumIter;
+use std::vec::Vec;
+use itertools::Itertools;
 
-/// Special characters include:
-/// ---------------
-/// | `=` | Alias |
-/// | `:` | Bind  |
-/// | `.` | Apply |
-/// | `>` | Match |
-/// ---------------
+/// # Special Characters
 #[derive(Debug)]
 #[derive(PartialEq)]
+#[derive(EnumIter)]
+#[derive(Clone)]
 pub enum SpecialCharacter {
+    /// [`<alias>`](#variant.Alias) `::= '='`
     Alias,
+    /// [`<bind>`](#variant.Bind) `::= ':'`
     Bind,
+    /// [`<apply>`](#variant.Apply) `::= '.'`
     Apply,
+    /// [`<match>`](#variant.Match) `::= '->'`
     Match,
     StartList,
     EndList,
@@ -24,85 +23,141 @@ pub enum SpecialCharacter {
     EndSet,
 }
 
+impl ToString for SpecialCharacter {
+    fn to_string(&self) -> String {
+        return match self {
+            SpecialCharacter::Alias => String::from("="),
+            SpecialCharacter::Bind => String::from(":"),
+            SpecialCharacter::Apply => String::from("."),
+            SpecialCharacter::Match => String::from(">"),
+            SpecialCharacter::StartList => String::from("("),
+            SpecialCharacter::EndList => String::from(")"),
+            SpecialCharacter::StartSet => String::from("{"),
+            SpecialCharacter::EndSet => String::from("}"),
+        }
+    }
+}
+
 #[derive(Debug)]
 #[derive(PartialEq)]
+#[derive(Clone)]
 pub enum Token {
     Name(String),
     Special(SpecialCharacter)
 }
 
-pub fn lex(mut stream: Iter<Chars<'_>>) -> impl Stream<Item = Token> + '_ {
-    stream! {
+impl ToString for Token {
+    fn to_string(&self) -> String {
+        return match self {
+            Token::Name(s) => s.clone(),
+            Token::Special(c) => c.to_string(),
+        }
+    }
+}
+
+pub fn tokens_to_string(tokens: Vec<Token>) -> String {
+    return tokens.iter().map(|token| token.to_string()).join(" ");
+}
+
+pub trait ToTokens {
+    fn to_tokens(&self) -> Vec<Token>;
+}
+
+impl ToTokens for String {
+    fn to_tokens(&self) -> Vec<Token> {
+        let mut vec: Vec<Token> = Vec::new();
         let mut name: String = String::from("");
-        macro_rules! yield_name {
+
+        macro_rules! add {
+            ($token: expr) => {
+                vec.push($token)
+            }
+        }
+
+        macro_rules! add_name {
             () => {
                 if name.len() > 0 {
-                    yield Token::Name(name);
+                    add!(Token::Name(name));
                     name = String::from("");
                 }
             }
         }
 
-        while let Some(c) = stream.next().await {
+        for c in self.chars() {
             match c {
-                '='  => {yield_name!();yield Token::Special(SpecialCharacter::Alias);},
-                ':'  => {yield_name!();yield Token::Special(SpecialCharacter::Bind);},
-                '.'  => {yield_name!();yield Token::Special(SpecialCharacter::Apply);},
-                '>'  => {yield_name!();yield Token::Special(SpecialCharacter::Match);}
-                '('  => {yield_name!();yield Token::Special(SpecialCharacter::StartList);},
-                ')'  => {yield_name!();yield Token::Special(SpecialCharacter::EndList);},
-                '{'  => {yield_name!();yield Token::Special(SpecialCharacter::StartSet);},
-                '}'  => {yield_name!();yield Token::Special(SpecialCharacter::EndSet);},
-                ' '  => {yield_name!()}
-                '\t' => {yield_name!()}
-                '\n' => {yield_name!()}
-                '\r' => {yield_name!()}
+                '='  => {add_name!();add!(Token::Special(SpecialCharacter::Alias));},
+                ':'  => {add_name!();add!(Token::Special(SpecialCharacter::Bind));},
+                '.'  => {add_name!();add!(Token::Special(SpecialCharacter::Apply));},
+                '>'  => {add_name!();add!(Token::Special(SpecialCharacter::Match));}
+                '('  => {add_name!();add!(Token::Special(SpecialCharacter::StartList));},
+                ')'  => {add_name!();add!(Token::Special(SpecialCharacter::EndList));},
+                '{'  => {add_name!();add!(Token::Special(SpecialCharacter::StartSet));},
+                '}'  => {add_name!();add!(Token::Special(SpecialCharacter::EndSet));},
+                ' '  => {add_name!()}
+                '\t' => {add_name!()}
+                '\n' => {add_name!()}
+                '\r' => {add_name!()}
                 _    => {name.push(c);}
             }
         }
-        yield_name!();
+        add_name!();
+
+        return vec;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures_util::pin_mut;
+    use crate::spec::lambda::all_lambdas;
 
-    async fn text_tokens(text: String) -> Vec<Token> {
-        let stream = tokio_stream::iter(text.chars());
-        let tokens = lex(stream);
-        pin_mut!(tokens);
-
-        let mut v: Vec<Token> = Vec::new();
-        while let Some(token) = tokens.next().await {
-            v.push(token);
-        }
-        return v;
-    }
-
-    macro_rules! assert_lexes {
+    macro_rules! assert_reflexes {
         ($txt: expr, $tokens: expr) => {
             assert_eq!(
-                text_tokens($txt.to_string()).await,
+                $txt.to_string().to_tokens(),
                 $tokens
-            )
+            );
+            assert_eq!(
+                $txt.to_string(),
+                tokens_to_string($tokens)
+            );
         }
     }
 
-    #[tokio::test]
-    async fn it_lexes() {
-        assert_lexes!(
+    #[test]
+    fn it_reflexes_empty() {
+        assert_reflexes!(
+            "",
+            vec![]
+        );
+    }
+
+    #[test]
+    fn it_reflexes_special() {
+        for c in <SpecialCharacter as IntoEnumIterator>::iter() {
+            assert_reflexes!(
+                c.clone(),
+                vec![Token::Special(c.clone())]
+            );
+        }
+    }
+
+    #[test]
+    fn it_reflexes_name() {
+        assert_reflexes!(
             "a",
             vec![Token::Name("a".to_string())]
         );
 
-        assert_lexes!(
+        assert_reflexes!(
             "aaaaaaaa",
             vec![Token::Name("aaaaaaaa".to_string())]
         );
+    }
 
-        assert_lexes!(
+    #[test]
+    fn it_reflexes_names() {
+        assert_reflexes!(
             "a b c a",
             vec![
                 Token::Name("a".to_string()),
@@ -111,9 +166,12 @@ mod tests {
                 Token::Name("a".to_string()),
             ]
         );
+    }
 
-        assert_lexes!(
-            "x:M",
+    #[test]
+    fn it_reflexes_bindings() {
+        assert_reflexes!(
+            "x : M",
             vec![
                 Token::Name("x".to_string()),
                 Token::Special(SpecialCharacter::Bind),
@@ -121,8 +179,8 @@ mod tests {
             ]
         );
 
-        assert_lexes!(
-            "{x=y}:x:M",
+        assert_reflexes!(
+            "{ x = y } : x : M",
             vec![
                 Token::Special(SpecialCharacter::StartSet),
                 Token::Name("x".to_string()),
@@ -136,4 +194,43 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn it_reflexes_sets() {
+        assert_reflexes!(
+            "{ a b c a }",
+            vec![
+                Token::Special(SpecialCharacter::StartSet),
+                Token::Name("a".to_string()),
+                Token::Name("b".to_string()),
+                Token::Name("c".to_string()),
+                Token::Name("a".to_string()),
+                Token::Special(SpecialCharacter::EndSet),
+            ]
+        );
+
+        assert_reflexes!(
+            "{ { a b c a } }",
+            vec![
+                Token::Special(SpecialCharacter::StartSet),
+                Token::Special(SpecialCharacter::StartSet),
+                Token::Name("a".to_string()),
+                Token::Name("b".to_string()),
+                Token::Name("c".to_string()),
+                Token::Name("a".to_string()),
+                Token::Special(SpecialCharacter::EndSet),
+                Token::Special(SpecialCharacter::EndSet),
+            ]
+        );
+    }
+
+    // #[test]
+    // fn it_reflexes_lambda() {
+    //     for lambda in all_lambdas() {
+    //         assert_reflexes!(
+    //             lambda.text,
+    //             lambda.clone().tokens
+    //         );
+    //     }
+    // }
 }
