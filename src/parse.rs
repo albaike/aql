@@ -32,14 +32,14 @@ pub enum Container {
     List
 }
 
-/// # Operand
+/// # Operator
 /// ## Formal Grammar
-/// `<operation> ::=` [`<expression>`](./enum.Expression.html) `<operand>` [`<expression>`](./enum.Expression.html)
+/// `<operation> ::=` [`<expression>`](./enum.Expression.html) `<operator>` [`<expression>`](./enum.Expression.html)
 /// 
-/// [`<operand>`](#) ::=` [`<alias>`](#variant.Alias) `|` [`<bind>`](#variant.Bind) `|` [`<apply>`](#variant.Apply) `|` [`<match>`](#variant.Match)
+/// [`<operator>`](#) ::=` [`<alias>`](#variant.Alias) `|` [`<bind>`](#variant.Bind) `|` [`<apply>`](#variant.Apply) `|` [`<match>`](#variant.Match)
 #[derive(Debug, Clone)]
-#[derive(PartialEq)]
-pub enum Operand {
+#[derive(PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Operator {
     /// Assign the right operand (value) to the left operand (name) within that namespace
     /// 
     /// [Formal Grammar](../lex/enum.SpecialCharacter.html#variant.Alias)
@@ -70,7 +70,7 @@ pub enum Node {
     /// ## Formal Grammar
     /// [`<name>`](#variant.Name) `::= ( <letter> | <number> | '_' )+`
     Name(String),
-    Operand(Operand),
+    Operator(Operator),
     Container(Container),
     OpenContainer(Container),
 }
@@ -105,9 +105,9 @@ impl Expression {
             }}
         }
 
-        macro_rules! add_operand {
-            ($operand: expr) => {{
-                self.add_fork(Node::Operand($operand), root)
+        macro_rules! add_operator {
+            ($operator: expr) => {{
+                self.add_fork(Node::Operator($operator), root)
             }}
         }
 
@@ -127,10 +127,10 @@ impl Expression {
 
         return  match token {
             Token::Name(name) => {add_name!(name.clone())},
-            Token::Special(SpecialCharacter::Alias) => {add_operand!(Operand::Alias)}
-            Token::Special(SpecialCharacter::Bind) => {add_operand!(Operand::Bind)}
-            Token::Special(SpecialCharacter::Apply) => {add_operand!(Operand::Apply)}
-            Token::Special(SpecialCharacter::Match) => {add_operand!(Operand::Match)}
+            Token::Special(SpecialCharacter::Alias) => {add_operator!(Operator::Alias)}
+            Token::Special(SpecialCharacter::Bind) => {add_operator!(Operator::Bind)}
+            Token::Special(SpecialCharacter::Apply) => {add_operator!(Operator::Apply)}
+            Token::Special(SpecialCharacter::Match) => {add_operator!(Operator::Match)}
             Token::Special(SpecialCharacter::StartList) => {open_container!(Container::List)}
             Token::Special(SpecialCharacter::StartSet) => {open_container!(Container::Set)}
             Token::Special(SpecialCharacter::EndList) => {close_container!(Container::List)}
@@ -188,7 +188,7 @@ impl ExpressionTree for Expression {
         return match self.tree.node_weight(index)
                        .expect("Must search on existing nodes") 
         {
-            Node::Operand(_) => {
+            Node::Operator(_) => {
                 match self.children(index).count() {
                     2 => self.search_accept(self.parent(index).expect("Must have parent")),
                     _ => index
@@ -324,7 +324,7 @@ impl ToTokens for Expression {
 
             let v = match node {
                 Node::Name(n) => vec![Token::Name(n.clone())],
-                Node::Operand(o) => {
+                Node::Operator(o) => {
                     let mut tokens: Vec<Token> = Vec::new();
                     let children: Vec<NodeIndex> = expr.children(index).collect();
                     tokens.extend(
@@ -334,10 +334,10 @@ impl ToTokens for Expression {
                         ).iter().map(|token| token.clone())
                     );
                     tokens.push(Token::Special(match o {
-                        Operand::Alias => SpecialCharacter::Alias,
-                        Operand::Bind => SpecialCharacter::Bind,
-                        Operand::Apply => SpecialCharacter::Apply,
-                        Operand::Match => SpecialCharacter::Match,
+                        Operator::Alias => SpecialCharacter::Alias,
+                        Operator::Bind => SpecialCharacter::Bind,
+                        Operator::Apply => SpecialCharacter::Apply,
+                        Operator::Match => SpecialCharacter::Match,
                     }));
                     tokens.extend(
                         to_tokens_part(
@@ -422,7 +422,7 @@ mod tests {
         () => {Token::Name(String::from("x"))}
     }
 
-    macro_rules! all_operand_tokens {
+    macro_rules! all_operator_tokens {
         () => {[
             SpecialCharacter::Alias,
             SpecialCharacter::Bind,
@@ -486,7 +486,7 @@ mod tests {
 
     #[test]
     fn it_parses_operation() {
-        for operand_token in all_operand_tokens!() {
+        for operator_token in all_operator_tokens!() {
             let mut expr = Expression::new();
             let mut index = NodeIndex::new(0);
 
@@ -494,7 +494,7 @@ mod tests {
             assert_eq!(index, NodeIndex::new(1));
             assert_eq!(expr.parent(index), Some(NodeIndex::new(0)));
 
-            index = expr.parse_token(&Token::Special(operand_token), index);
+            index = expr.parse_token(&Token::Special(operator_token), index);
             assert_eq!(index, NodeIndex::new(2));
             assert_eq!(expr.parent(index), Some(NodeIndex::new(0)));
             assert_eq!(expr.parent(NodeIndex::new(1)), Some(index));
@@ -536,7 +536,7 @@ mod tests {
                 Node::Container(Container::Set),
                 Node::Container(Container::Set),
                 Node::Name(String::from("a")),
-                Node::Operand(Operand::Bind),
+                Node::Operator(Operator::Bind),
                 Node::Container(Container::Set),
                 Node::Name(String::from("b"))
             ],

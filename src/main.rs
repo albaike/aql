@@ -1,5 +1,7 @@
 #![feature(return_position_impl_trait_in_trait)]
+#![feature(type_alias_impl_trait)]
 #![feature(lazy_cell)]
+#![feature(box_into_inner)]
 
 use petgraph::graph::NodeIndex;
 use tokio::io::AsyncBufReadExt;

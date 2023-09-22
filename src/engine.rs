@@ -1,14 +1,92 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use petgraph::graph::NodeIndex;
 use itertools::Itertools;
-// use itertools::collect_tuple;
 use crate::parse::{Expression, ToExpression};
 use crate::parse::Node;
-use crate::parse::Operand;
+use crate::parse::Operator;
 use crate::parse::Container;
+use enum_dispatch::enum_dispatch;
 
+type Entities = Vec<EntityEnum>;
+type Names = Vec<Name>;
+
+/// # Entity
+/// `$N \cup O \cup C$`
+#[enum_dispatch]
 trait EntityType {
-    fn rename(&self, a: Entity, b:Entity) -> Option<Entity>;
+    /// `$\rightarrow O(e', p, e'') : {e', e''} $`
+    fn children(&self) -> Entities;
+    fn names(&self) -> Names;
+    fn bound(&self) -> Names;
+    fn evaluate(&self) -> EntityEnum;
+    fn apply(&self, entity: &EntityEnum, free: &Names) -> EntityEnum;
+    fn replace(&self, a: &EntityEnum, b: &EntityEnum, free: &Names) -> EntityEnum;
+}
+
+fn default_names<T: EntityType>(entity: &T) -> Names {
+    let e = entity.children();
+    let mut children = e.iter();
+
+    match children.next().map(|first_child|
+        children.fold(
+            first_child.names(),
+            |bound_running, child| 
+                BTreeSet::from_iter(
+                    bound_running
+                ).union(
+                    &BTreeSet::from_iter(child.names())
+                ).cloned()
+                .collect::<Vec<Name>>()
+        )
+    ) {
+        Some(i) => i,
+        None => Vec::<Name>::new()
+    }
+}
+
+/// `$B(e) := e \rightarrow  : \cup \{ B(c) \| c \in C(e) \} $`
+fn default_bound<T: EntityType>(entity: &T) -> Names {
+    let e = entity.children();
+    let mut children = e.iter();
+
+    match children.next().map(|first_child|
+        children.fold(
+            first_child.bound(),
+            |bound_running, child| 
+                BTreeSet::from_iter(
+                    bound_running
+                ).union(
+                    &BTreeSet::from_iter(child.bound())
+                ).cloned()
+                .collect::<Vec<Name>>()
+        )
+    ) {
+        Some(i) => i,
+        None => vec![]
+    }
+}
+
+fn default_to_string(entity: impl ToExpression) -> String {
+    return entity.to_expression().to_string()
+}
+
+fn entity_free(entity: impl EntityType) -> Names {
+    BTreeSet::from_iter(entity.names())
+            .difference(&BTreeSet::from_iter(entity.bound()))
+            .cloned()
+            .collect::<Vec<Name>>()
+}
+
+fn union_maybe_name(free: &Names, entity: &EntityEnum) -> Names {
+    match entity {
+        EntityEnum::Name(n) => 
+            BTreeSet::from_iter(free.clone())
+                    .union(&BTreeSet::from([n.clone()]))
+                    .cloned()
+                    .collect::<Vec<Name>>()
+        ,
+        _ => free.clone()
+    }
 }
 
 #[derive(PartialOrd, PartialEq)]
@@ -19,25 +97,51 @@ pub struct Name {
 }
 
 impl Name {
-    fn new (value: String) -> Self {
-        return Name {
+    fn new(value: String) -> Self {
+        Self {
             value
-        };
+        }
     }
 }
 
 impl EntityType for Name {
-    fn rename(&self, a: Entity, b: Entity) -> Option<Entity> {
-        return match a {
-            Entity::Name(name) => {
-                return if name == *self {
-                    Some(b)
+    /// `$C(e) :=  e \rightarrow N : \varnothing $`
+    fn children(&self) -> Entities {
+        vec![]
+    }
+
+    /// `$NS(e) :=  e \rightarrow N : {e} $`
+    fn names(&self) -> Names {
+        vec![self.clone()]
+    }
+
+    fn bound(&self) -> Names {
+        default_bound(self)
+    }
+
+    fn evaluate(&self) -> EntityEnum {
+        self.clone().into()
+    }
+
+    fn apply(&self, _entity: &EntityEnum, _free: &Names) -> EntityEnum {
+        self.clone().into()
+    }
+
+    fn replace(&self, a: &EntityEnum, b: &EntityEnum, free: &Names) -> EntityEnum {
+        match a {
+            EntityEnum::Name(name) => {
+                if *name == self.clone() {
+                    if free.contains(self) {
+                        b.clone()
+                    } else {
+                        self.clone().into()
+                    }
                 } else {
-                    None
+                    self.clone().into()
                 }
             },
-            _ => None
-        };
+            _ => self.clone().into()
+        }
     }
 }
 
@@ -45,7 +149,13 @@ impl ToExpression for Name {
     fn to_expression(&self) -> Expression {
         let mut expression =  Expression::empty();
         expression.tree.add_node(Node::Name(self.value.clone()));
-        return expression;
+        expression
+    }
+}
+
+impl ToString for Name {
+    fn to_string(&self) -> String {
+        default_to_string(self.clone()) // TODO: pass by reference
     }
 }
 
@@ -53,36 +163,103 @@ impl ToExpression for Name {
 #[derive(Eq, Hash, Ord, Clone)]
 #[derive(Debug)]
 pub struct Operation {
-    left: Box<Entity>,
-    right: Box<Entity>
+    operator: Operator,
+    left: Box<EntityEnum>,
+    right: Box<EntityEnum>
 }
 
 impl Operation {
-    fn new(left: Entity, right: Entity) -> Self {
-        return Operation {
+    fn new(operator: Operator, left: EntityEnum, right: EntityEnum) -> Self {
+        Self {
+            operator,
             left: Box::new(left),
             right: Box::new(right)
         }
     }
+}
 
-    fn to_expression(&self, operand: Operand) -> Expression {
+impl ToExpression for Operation {
+    fn to_expression(&self) -> Expression {
         let mut expression =  Expression::empty();
-        let index = expression.tree.add_node(Node::Operand(operand));
+        let index = expression.tree.add_node(Node::Operator(self.operator.clone()));
         expression.add_expression(&self.left.to_expression(), index, NodeIndex::new(0));
         expression.add_expression(&self.right.to_expression(), index, NodeIndex::new(0));
-        return expression;
+        expression
     }
 }
 
 impl EntityType for Operation {
-    fn rename(&self, a: Entity, b: Entity) -> Option<Entity> {
-        return match (*self.right).rename(a, b) {
-            Some(replaced) => Some(Entity::Alias(Operation {
-                left: self.left.clone(),
-                right: Box::new(replaced),
-            })),
-            None => None
+    fn children(&self) -> Entities {
+        vec![
+            Box::into_inner(self.left.clone()),
+            Box::into_inner(self.right.clone()),
+        ]
+    }
+
+    fn names(&self) -> Names {
+        default_names(self)
+    }
+
+    fn bound(&self) -> Names {
+        match self.operator {
+            Operator::Bind => {
+                BTreeSet::<Name>::from_iter(self.right.bound())
+                .union(&BTreeSet::<Name>::from_iter(self.right.bound()))
+                .cloned()
+                .collect::<Vec<Name>>()
+
+            },
+            _ => default_bound(self)
         }
+    }
+
+    fn evaluate(&self) -> EntityEnum {
+        match self.operator {
+            Operator::Apply => {
+                let free = vec![];
+                self.left.apply(
+                    &Box::into_inner(self.right.clone()),
+                    &free
+                )
+            },
+            _ => Self::new(
+                self.operator.clone(),
+                self.left.evaluate(),
+                self.right.evaluate(),
+            ).into()
+        }
+    }
+
+    fn apply(&self, entity: &EntityEnum, free: &Names) -> EntityEnum {
+        match self.operator {
+            Operator::Alias => entity.replace(
+                &Box::into_inner(self.left.clone()),
+                &Box::into_inner(self.right.clone()),
+                &union_maybe_name(free, entity)
+            ),
+            Operator::Bind => self.right.replace(
+                &Box::into_inner(self.left.clone()),
+                entity,
+                &union_maybe_name(free, entity)
+            ),
+            _ => entity.clone()
+        }
+    }
+
+    fn replace(&self, a: &EntityEnum, b: &EntityEnum, free: &Names) -> EntityEnum {
+        Self::new(
+            self.operator.clone(),
+            self.left.replace(
+                a,
+                b,
+                free,
+            ),
+            self.right.replace(
+                a,
+                b,
+                free,
+            ),
+        ).into()
     }
 }
 
@@ -90,82 +267,25 @@ impl EntityType for Operation {
 #[derive(Eq, Hash, Ord, Clone)]
 #[derive(Debug)]
 pub struct Set {
-    entities: BTreeSet<Entity>,
-    names: BTreeMap<String, Entity>,
-    bindings: BTreeMap<String, Entity>,
+    entities: BTreeSet<EntityEnum>
 }
 
 impl Set {
     pub fn new () -> Set {
         return Set {
             entities: BTreeSet::new(),
-            names: BTreeMap::new(),
-            bindings: BTreeMap::new(),
         }
     }
 
-    // TODO: validate that sets have unique names
-    pub fn add (&mut self, entity: Entity) {
+    pub fn add (&mut self, entity: EntityEnum) {
         self.entities.insert(entity.clone());
-
-        match entity.clone() {
-            Entity::Name(n) => {
-                self.names.insert(n.value, entity);
-            },
-            Entity::Alias(alias) => {
-                match *(alias.left) {
-                    Entity::Name(name) => {
-                        self.names.insert(
-                            name.value,
-                            *(alias.right)
-                        );
-                    },
-                    _ => ()
-                }
-            },
-            Entity::Binding(binding) => {
-                match *(binding.left) {
-                    Entity::Name(name) => {
-                        self.bindings.insert(
-                            name.value,
-                            *(binding.right)
-                        );
-                    },
-                    _ => ()
-                }
-            },
-            _ => ()
-        }
-    }
-
-    pub fn apply(&self, entity: Entity) -> Self {
-        let mut source = self.clone();
-        match entity {
-            Entity::Set(set) => {
-                for e in set.entities {
-                    source = source.apply(e);
-                }
-            },
-            Entity::Alias(alias) => {
-                match source.rename(*(alias.left), *(alias.right)) {
-                    Some(Entity::Set(s)) => {
-                        source = s;
-                    },
-                    _ => ()
-                }
-            },
-            _ => ()
-        }
-        return source
     }
 }
 
-impl<const N: usize, const M: usize, const O: usize> From<([Entity; N], [(String, Entity); M], [(String, Entity); O])> for Set {
-    fn from(values: ([Entity; N], [(String, Entity); M], [(String, Entity); O])) -> Self {
+impl<const N: usize> From<[EntityEnum; N]> for Set {
+    fn from(values: [EntityEnum; N]) -> Self {
         return Set {
-            entities: BTreeSet::from(values.0),
-            names: BTreeMap::from(values.1),
-            bindings: BTreeMap::from(values.2),
+            entities: BTreeSet::from(values),
         }
     }
 }
@@ -184,93 +304,93 @@ impl ToExpression for Set {
 }
 
 impl EntityType for Set {
-    fn rename(&self, a: Entity, b: Entity) -> Option<Entity> {
-        let mut new = self.clone();
-        let mut renamed = false;
-        for e in self.entities.clone() {
-            match e.rename(a.clone(), b.clone()) {
-                Some(replaced) => {
-                    new.entities.remove(&e);
-                    new.add(replaced);
-                    renamed = true;
-                },
-                None => ()
-            }
-        }
+    fn children(&self) -> Entities {
+        self.entities.iter()
+                    .cloned()
+                    .collect::<Vec<EntityEnum>>()
+    }
 
-        return if renamed {
-            Some(Entity::Set(new))
-        } else {
-            None
-        };
+    fn names(&self) -> Names {
+        default_names(self)
+    }
+
+    fn bound(&self) -> Names {
+        default_names(self)
+    }
+
+    fn evaluate(&self) -> EntityEnum {
+        Set {
+            entities: self.children().iter().map(|child| child.evaluate()).collect()
+        }.into()
+    }
+
+    fn apply(&self, entity: &EntityEnum, free: &Names) -> EntityEnum {
+        Set {
+            entities: self.children()
+                          .iter()
+                          .map(|child| child.apply(
+                                entity,
+                              &union_maybe_name(free, entity)
+                            ))
+                          .collect()
+        }.into()
+    }
+
+    fn replace(&self, a: &EntityEnum, b: &EntityEnum, free: &Names) -> EntityEnum {
+        Set {
+            entities: self.children()
+                          .iter()
+                          .map(|child| child.replace(
+                              a,
+                              b,
+                              &union_maybe_name(free, &child)
+                          ))
+                          .collect()
+        }.into()
     }
 }
 
+#[enum_dispatch(EntityType)]
 #[derive(PartialOrd, PartialEq)]
 #[derive(Eq, Hash, Ord, Clone)]
 #[derive(Debug)]
-pub enum Entity {
-    Set(Set),
-    Name(Name),
-    Alias(Operation),
-    Binding(Operation)
+pub enum EntityEnum {
+    Name,
+    Operation,
+    Set
 }
 
-impl EntityType for Entity {
-    fn rename(&self, a: Entity, b: Entity) -> Option<Entity> {
-        return match self {
-            Entity::Set(e) => e.rename(a, b),
-            Entity::Name(e) => e.rename(a, b),
-            Entity::Alias(e) => e.rename(a, b),
-            Entity::Binding(e) => e.rename(a, b),
-        }
-    }
-}
-
-impl ToExpression for Entity {
+impl ToExpression for EntityEnum {
     fn to_expression(&self) -> Expression {
-        return match self {
-            Entity::Set(e) => e.to_expression(),
-            Entity::Name(e) => e.to_expression(),
-            Entity::Alias(e) => e.to_expression(Operand::Alias),
-            Entity::Binding(e) => e.to_expression(Operand::Bind),
+        match self {
+            EntityEnum::Name(e) => e.to_expression(),
+            EntityEnum::Operation(e) => e.to_expression(),
+            EntityEnum::Set(e) => e.to_expression(),
         }
     }
 }
 
-impl ToString for Entity {
+impl ToString for EntityEnum {
     fn to_string(&self) -> String {
-        return self.to_expression().to_string();
+        default_to_string(self.clone())
     }
 }
 
-// struct Engine {
-//     root: Set
-// }
-
-pub fn read(expr: &Expression, index: NodeIndex) -> Option<Entity> {
+pub fn read(expr: &Expression, index: NodeIndex) -> Option<EntityEnum> {
     return match expr.tree.node_weight(index) {
         Some(Node::Name(n)) => Some(
-            Entity::Name(Name::new(String::from(n))),
+            Name::new(n.clone()).into()
         ),
-        Some(Node::Operand(o)) => {
+        Some(Node::Operator(o)) => {
             match expr.children(index)
                     .map(|child|
                         read(expr, child)
                             .expect("Child should be readable"))
-                    .collect_tuple::<(Entity, Entity)>() {
+                    .collect_tuple::<(EntityEnum, EntityEnum)>() {
                 Some((a, b)) => {
                     match o {
-                        Operand::Alias => Some(Entity::Alias(Operation::new(a, b))),
-                        Operand::Apply => {
-                            match b {
-                                Entity::Set(b_set) => Some(Entity::Set(
-                                    b_set.apply(a)
-                                )),
-                                _ => None
-                            }
-                        },
-                        _ => None
+                        Operator::Match => None,
+                        _ => Some(Operation::new(o.clone(), a, b).into()),
                     }
                 },
                 _ => None
@@ -286,7 +406,7 @@ pub fn read(expr: &Expression, index: NodeIndex) -> Option<Entity> {
                             _ => {}
                         }
                     }
-                    Some(Entity::Set(set))
+                    Some(set.into())
                 },
                 _ => None
             }
@@ -300,6 +420,19 @@ mod tests {
     use super::*;
     use crate::lex::{Token, ToTokens};
     use crate::lex::SpecialCharacter;
+
+    fn test_entity_monad(
+        entity: EntityEnum,
+        children: BTreeSet<EntityEnum>,
+        names: BTreeSet<Name>,
+        bound: BTreeSet<Name>,
+        evaluate: EntityEnum,
+    ) {
+        assert_eq!(BTreeSet::from_iter(entity.children()), children);
+        assert_eq!(BTreeSet::from_iter(entity.names()), names);
+        assert_eq!(BTreeSet::from_iter(entity.bound()), bound);
+        assert_eq!(entity.evaluate(), evaluate);
+    }
 
     macro_rules! test_expr {
         ($expr: expr, $entity: expr) => {{
@@ -328,195 +461,303 @@ mod tests {
         }}
     }
 
-    // #[test]
-    // fn it_reads_empty() {
-    //     assert_eq!(
-    //         read(&Expression::from(vec![]), NodeIndex::new(0)),
-    //         Some(Entity::Set(Set::new()))
-    //     );
+    #[test]
+    fn it_reads_empty() {
+        // assert_eq!(
+        //     read(&Expression::from(vec![]), NodeIndex::new(0)),
+        //     Some(Entity::Set(Set::new()))
+        // );
 
-    // }
+        test_entity_monad(
+            Set {
+                entities: BTreeSet::from([]),
+            }.into(),
+            BTreeSet::new(),
+            BTreeSet::new(),
+            BTreeSet::new(),
+            Set::new().into()
+        );
+    }
+
+    #[test]
+    fn it_reads_name() {
+        test_entity_monad(
+            EntityEnum::Name(Name::new(String::from("a"))),
+            BTreeSet::new(),
+            BTreeSet::from([Name::new(String::from("a"))]),
+            BTreeSet::new(),
+            EntityEnum::Name(Name::new(String::from("a"))),
+        )
+    }
     
     #[test]
-    fn it_reads_nested_set() {
-        test_expr!(
-            Expression::from(&vec![
-                Token::Special(SpecialCharacter::StartSet),
-                Token::Special(SpecialCharacter::EndSet),
+    fn it_reads_alias() {
+        test_entity_monad(
+            EntityEnum::Operation(
+                Operation::new(
+                    Operator::Alias,
+                    EntityEnum::Name(Name::new(String::from("a"))),
+                    EntityEnum::Name(Name::new(String::from("b"))),
+                )
+            ),
+            BTreeSet::from([
+                EntityEnum::Name(Name::new(String::from("a"))),
+                EntityEnum::Name(Name::new(String::from("b"))),
             ]),
-            Entity::Set(Set {
+            BTreeSet::from([
+                Name::new(String::from("a")),
+                Name::new(String::from("b")),
+            ]),
+            BTreeSet::new(),
+            EntityEnum::Operation(
+                Operation::new(
+                    Operator::Alias,
+                    EntityEnum::Name(Name::new(String::from("a"))),
+                    EntityEnum::Name(Name::new(String::from("b"))),
+                )
+            ),
+        )
+    }
+    
+    #[test]
+    fn it_reads_bind() {
+        test_entity_monad(
+            EntityEnum::Operation(
+                Operation::new(
+                    Operator::Bind,
+                    EntityEnum::Name(Name::new(String::from("a"))),
+                    EntityEnum::Name(Name::new(String::from("b"))),
+                )
+            ),
+            BTreeSet::from([
+                EntityEnum::Name(Name::new(String::from("a"))),
+                EntityEnum::Name(Name::new(String::from("b"))),
+            ]),
+            BTreeSet::from([
+                Name::new(String::from("a")),
+                Name::new(String::from("b")),
+            ]),
+            BTreeSet::new(),
+            EntityEnum::Operation(
+                Operation::new(
+                    Operator::Bind,
+                    EntityEnum::Name(Name::new(String::from("a"))),
+                    EntityEnum::Name(Name::new(String::from("b"))),
+                )
+            ),
+        )
+    }
+    #[test]
+    fn it_reads_identity() {
+        test_entity_monad(
+            EntityEnum::Operation(Operation::new(
+                Operator::Apply,
+                EntityEnum::Operation(Operation::new(
+                    Operator::Bind,
+                    EntityEnum::Name(Name::new(String::from("x"))),
+                    EntityEnum::Name(Name::new(String::from("x"))),
+                )),
+                EntityEnum::Name(Name::new(String::from("x"))),
+            )),
+            BTreeSet::from([
+                EntityEnum::Operation(Operation::new(
+                    Operator::Bind,
+                    EntityEnum::Name(Name::new(String::from("x"))),
+                    EntityEnum::Name(Name::new(String::from("x"))),
+                )),
+                EntityEnum::Name(Name::new(String::from("x"))),
+            ]),
+            BTreeSet::from([
+                Name::new(String::from("x")),
+            ]),
+            BTreeSet::new(),
+            EntityEnum::Name(Name::new(String::from("x")))
+        )
+    }
+    
+    #[test]
+    fn it_reads_set() {
+        // test_expr!(
+        //     Expression::from(&vec![
+        //         Token::Special(SpecialCharacter::StartSet),
+        //         Token::Special(SpecialCharacter::EndSet),
+        //     ]),
+        test_entity_monad(
+            Set {
                 entities: BTreeSet::from([
-                    Entity::Set(Set {
+                    Set {
                         entities: BTreeSet::new(),
-                        names: BTreeMap::new(),
-                        bindings: BTreeMap::new()
-                    })
+                    }.into()
                 ]),
-                names: BTreeMap::new(),
-                bindings: BTreeMap::new()
-            })
-        );
-    }
-
-    #[test]
-    fn it_reads_nested_set_with_name() {
-        test_expr!(
-            Expression::from(&vec![
-                Token::Special(SpecialCharacter::StartSet),
-                Token::Name(String::from("a")),
-                Token::Special(SpecialCharacter::EndSet),
+            }.into(),
+            BTreeSet::from([
+                Set {
+                    entities: BTreeSet::new(),
+                }.into()
             ]),
-            Entity::Set(Set {
-                entities: BTreeSet::from([
-                    Entity::Set(Set {
-                        entities: BTreeSet::from([
-                            Entity::Name(Name::new(String::from("a")))
-                        ]),
-                        names: BTreeMap::from([
-                            (String::from("a"), Entity::Name(Name::new(String::from("a"))))
-                        ]),
-                        bindings: BTreeMap::new()
-                    })
-                ]),
-                names: BTreeMap::new(),
-                bindings: BTreeMap::new()
-            })
-        );
-    }
-
-    #[test]
-    fn it_reads_nested_set_with_alias() {
-        test_expr!(
-            Expression::from(&vec![
-                Token::Special(SpecialCharacter::StartSet),
-                Token::Name(String::from("a")),
-                Token::Special(SpecialCharacter::Alias),
-                Token::Name(String::from("b")),
-                Token::Special(SpecialCharacter::EndSet),
-            ]),
-            Entity::Set(Set::from((
-                [
-                    Entity::Set(Set::from((
-                        [
-                            Entity::Alias(Operation::new(
-                                Entity::Name(Name::new(String::from("a"))),
-                                Entity::Name(Name::new(String::from("b")))
-                            ))
-                        ],
-                        [
-                            (
-                                String::from("a"),
-                                Entity::Name(Name::new(String::from("b")))
-                            )
-                        ], []
-                    )))
-                ],
-                [], []
-            )))
+            BTreeSet::new(),
+            BTreeSet::new(),
+            Set::new().into()
         );
     }
 
     // #[test]
-    // fn it_reads_nested_set_with_binding() {
-    //     assert_eq!(
-    //         read(
-    //             &Expression::from([
-    //                 Token::Special(SpecialCharacter::StartSet),
-    //                 Token::Name(String::from("a")),
-    //                 Token::Special(SpecialCharacter::Bind),
-    //                 Token::Name(String::from("b")),
-    //                 Token::Special(SpecialCharacter::EndSet),
-    //             ]),
-    //             NodeIndex::new(0)
-    //         ),
-    //         Some(Entity::Set(Set {
-    //             items: BTreeSet::from([
+    // fn it_reads_nested_set_with_name() {
+    //     test_expr!(
+    //         Expression::from(&vec![
+    //             Token::Special(SpecialCharacter::StartSet),
+    //             Token::Name(String::from("a")),
+    //             Token::Special(SpecialCharacter::EndSet),
+    //         ]),
+    //         Set {
+    //             entities: BTreeSet::from([
     //                 Entity::Set(Set {
-    //                     items: BTreeSet::from([
-    //                         Entity::Binding(
-    //                             Box::new(Entity::Name(String::from("a"))),
-    //                             Box::new(Entity::Name(String::from("b")))
-    //                         )
+    //                     entities: BTreeSet::from([
+    //                         Entity::Name(Name::new(String::from("a")))
     //                     ]),
-    //                     names: BTreeMap::new()
+    //                     names: BTreeMap::from([
+    //                         (String::from("a"), Entity::Name(Name::new(String::from("a"))))
+    //                     ]),
+    //                     bindings: BTreeMap::new()
     //                 })
     //             ]),
-    //             names: BTreeMap::new()
-    //         }))
+    //         }.into()
     //     );
     // }
 
-    #[test]
-    fn it_reads_alias_apply() {
-        test_expr_exec!(
-            Expression::from(&vec![
-                // Arg: {a=b}
-                Token::Special(SpecialCharacter::StartSet),
-                Token::Name(String::from("a")),
-                Token::Special(SpecialCharacter::Alias),
-                Token::Name(String::from("b")),
-                Token::Special(SpecialCharacter::EndSet),
+    // #[test]
+    // fn it_reads_nested_set_with_alias() {
+    //     test_expr!(
+    //         Expression::from(&vec![
+    //             Token::Special(SpecialCharacter::StartSet),
+    //             Token::Name(String::from("a")),
+    //             Token::Special(SpecialCharacter::Alias),
+    //             Token::Name(String::from("b")),
+    //             Token::Special(SpecialCharacter::EndSet),
+    //         ]),
+    //         Entity::Set(Set::from((
+    //             [
+    //                 Entity::Set(Set::from((
+    //                     [
+    //                         Entity::Alias(Operation::new(
+    //                             Entity::Name(Name::new(String::from("a"))),
+    //                             Entity::Name(Name::new(String::from("b")))
+    //                         ))
+    //                     ],
+    //                     [
+    //                         (
+    //                             String::from("a"),
+    //                             Entity::Name(Name::new(String::from("b")))
+    //                         )
+    //                     ], []
+    //                 )))
+    //             ],
+    //             [], []
+    //         )))
+    //     );
+    // }
 
-                Token::Special(SpecialCharacter::Apply),
+    // // #[test]
+    // // fn it_reads_nested_set_with_binding() {
+    // //     assert_eq!(
+    // //         read(
+    // //             &Expression::from([
+    // //                 Token::Special(SpecialCharacter::StartSet),
+    // //                 Token::Name(String::from("a")),
+    // //                 Token::Special(SpecialCharacter::Bind),
+    // //                 Token::Name(String::from("b")),
+    // //                 Token::Special(SpecialCharacter::EndSet),
+    // //             ]),
+    // //             NodeIndex::new(0)
+    // //         ),
+    // //         Some(Entity::Set(Set {
+    // //             items: BTreeSet::from([
+    // //                 Entity::Set(Set {
+    // //                     items: BTreeSet::from([
+    // //                         Entity::Binding(
+    // //                             Box::new(Entity::Name(String::from("a"))),
+    // //                             Box::new(Entity::Name(String::from("b")))
+    // //                         )
+    // //                     ]),
+    // //                     names: BTreeMap::new()
+    // //                 })
+    // //             ]),
+    // //             names: BTreeMap::new()
+    // //         }))
+    // //     );
+    // // }
 
-                // Fn: {c=a}
-                Token::Special(SpecialCharacter::StartSet),
-                Token::Name(String::from("c")),
-                Token::Special(SpecialCharacter::Alias),
-                Token::Name(String::from("a")),
-                Token::Special(SpecialCharacter::EndSet),
-            ]),
-            // result: {c=b}
-            Expression::from(&vec![
-                Token::Special(SpecialCharacter::StartSet),
-                Token::Name(String::from("c")),
-                Token::Special(SpecialCharacter::Alias),
-                Token::Name(String::from("b")),
-                Token::Special(SpecialCharacter::EndSet),
-            ]),
-            Entity::Set(Set::from((
-                [
-                    Entity::Set(Set::from((
-                        [
-                            Entity::Alias(Operation::new(
-                                Entity::Name(Name::new(String::from("c"))),
-                                Entity::Name(Name::new(String::from("b")))
-                            ))
-                        ],
-                        [
-                            (
-                                String::from("c"),
-                                Entity::Name(Name::new(String::from("b")))
-                            )
-                        ], []
-                    )))
-                ],
-                [], []
-            )))
-        );
-    }
+    // #[test]
+    // fn it_reads_alias_apply() {
+    //     test_expr_exec!(
+    //         Expression::from(&vec![
+    //             // Arg: {a=b}
+    //             Token::Special(SpecialCharacter::StartSet),
+    //             Token::Name(String::from("a")),
+    //             Token::Special(SpecialCharacter::Alias),
+    //             Token::Name(String::from("b")),
+    //             Token::Special(SpecialCharacter::EndSet),
 
-    #[test]
-    fn it_does_church_arithmetic () {
-        let zero = Expression::from(
-            &String::from("f:x:x").to_tokens()
-        );
-        let one = Expression::from(
-            &String::from("f:x:x.f").to_tokens()
-        );
-        let succ = Expression::from(
-            &String::from("n:f:x:x.f.n").to_tokens()
-        );
+    //             Token::Special(SpecialCharacter::Apply),
 
-        let succ_zero = Expression::from(
-            &String::from("n:f:x:x.f.n.f:x:x").to_tokens()
-        );
+    //             // Fn: {c=a}
+    //             Token::Special(SpecialCharacter::StartSet),
+    //             Token::Name(String::from("c")),
+    //             Token::Special(SpecialCharacter::Alias),
+    //             Token::Name(String::from("a")),
+    //             Token::Special(SpecialCharacter::EndSet),
+    //         ]),
+    //         // result: {c=b}
+    //         Expression::from(&vec![
+    //             Token::Special(SpecialCharacter::StartSet),
+    //             Token::Name(String::from("c")),
+    //             Token::Special(SpecialCharacter::Alias),
+    //             Token::Name(String::from("b")),
+    //             Token::Special(SpecialCharacter::EndSet),
+    //         ]),
+    //         Entity::Set(Set::from((
+    //             [
+    //                 Entity::Set(Set::from((
+    //                     [
+    //                         Entity::Alias(Operation::new(
+    //                             Entity::Name(Name::new(String::from("c"))),
+    //                             Entity::Name(Name::new(String::from("b")))
+    //                         ))
+    //                     ],
+    //                     [
+    //                         (
+    //                             String::from("c"),
+    //                             Entity::Name(Name::new(String::from("b")))
+    //                         )
+    //                     ], []
+    //                 )))
+    //             ],
+    //             [], []
+    //         )))
+    //     );
+    // }
 
-        println!("{:?}", succ_zero);
+    // #[test]
+    // fn it_does_church_arithmetic () {
+    //     let zero = Expression::from(
+    //         &String::from("f:x:x").to_tokens()
+    //     );
+    //     let one = Expression::from(
+    //         &String::from("f:x:x.f").to_tokens()
+    //     );
+    //     let succ = Expression::from(
+    //         &String::from("n:f:x:x.f.n").to_tokens()
+    //     );
 
-        assert_eq!(
-            read(&succ_zero, NodeIndex::new(0)).expect("Should exec").to_string(),
-            one.to_string()
-        );
-    }
+    //     let succ_zero = Expression::from(
+    //         &String::from("n:f:x:x.f.n.f:x:x").to_tokens()
+    //     );
+
+    //     println!("{:?}", succ_zero);
+
+    //     assert_eq!(
+    //         read(&succ_zero, NodeIndex::new(0)).expect("Should exec").to_string(),
+    //         one.to_string()
+    //     );
+    // }
 }

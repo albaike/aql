@@ -1,7 +1,7 @@
 use crate::lex::Token;
 use crate::lex::SpecialCharacter;
 use crate::parse::Node;
-use crate::parse::Operand;
+use crate::parse::Operator;
 use crate::parse::Container;
 use std::sync::LazyLock;
 // use crate::parse::Expression;
@@ -34,7 +34,7 @@ static IDENTITY: LazyLock<Lambda> = lazy!(Lambda {
     parse_nodes: vec![
         Node::Container(Container::Set),
         Node::Name(String::from("x")),
-        Node::Operand(Operand::Bind),
+        Node::Operator(Operator::Bind),
         Node::Name(String::from("x")),
     ],
     parse_edges: vec![
@@ -56,7 +56,7 @@ static BINDING: LazyLock<Lambda> = lazy!(Lambda {
     parse_nodes: vec![
         Node::Container(Container::Set),
         Node::Name("x".to_string()),
-        Node::Operand(Operand::Bind),
+        Node::Operator(Operator::Bind),
         Node::Name("M".to_string())
     ],
     parse_edges: vec![
@@ -85,11 +85,11 @@ static ALPHA_CONVERSION: LazyLock<Lambda> = lazy!(Lambda {
         Node::Container(Container::Set),
         Node::Container(Container::Set),
         Node::Name("x".to_string()),
-        Node::Operand(Operand::Alias),
+        Node::Operator(Operator::Alias),
         Node::Name("y".to_string()),
-        Node::Operand(Operand::Bind),
+        Node::Operator(Operator::Bind),
         Node::Name("x".to_string()),
-        Node::Operand(Operand::Bind),
+        Node::Operator(Operator::Bind),
         Node::Name("M".to_string()),
     ],
     parse_edges: vec![
@@ -118,9 +118,9 @@ static K: LazyLock<Lambda> = lazy!(Lambda {
     parse_nodes: vec![
         Node::Container(Container::Set),
         Node::Name("x".to_string()),
-        Node::Operand(Operand::Bind),
+        Node::Operator(Operator::Bind),
         Node::Name("y".to_string()),
-        Node::Operand(Operand::Bind),
+        Node::Operator(Operator::Bind),
         Node::Name("x".to_string())
     ],
     parse_edges: vec![
