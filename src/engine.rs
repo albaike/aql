@@ -70,23 +70,11 @@ fn default_to_string(entity: impl ToExpression) -> String {
     return entity.to_expression().to_string()
 }
 
-fn entity_free(entity: impl EntityType) -> Names {
+fn entity_free(entity: &impl EntityType) -> Names {
     BTreeSet::from_iter(entity.names())
             .difference(&BTreeSet::from_iter(entity.bound()))
             .cloned()
             .collect::<Vec<Name>>()
-}
-
-fn union_maybe_name(free: &Names, entity: &EntityEnum) -> Names {
-    match entity {
-        EntityEnum::Name(n) => 
-            BTreeSet::from_iter(free.clone())
-                    .union(&BTreeSet::from([n.clone()]))
-                    .cloned()
-                    .collect::<Vec<Name>>()
-        ,
-        _ => free.clone()
-    }
 }
 
 #[derive(PartialOrd, PartialEq)]
@@ -240,12 +228,18 @@ impl EntityType for Operation {
             Operator::Alias => entity.replace(
                 &Box::into_inner(self.left.clone()),
                 &Box::into_inner(self.right.clone()),
-                &union_maybe_name(free, entity)
+                &BTreeSet::from_iter(free.clone())
+                    .union(&BTreeSet::from_iter(entity_free(entity).iter().cloned()))
+                    .cloned()
+                    .collect::<Vec<Name>>()
             ),
             Operator::Bind => self.right.replace(
                 &Box::into_inner(self.left.clone()),
                 entity,
-                &union_maybe_name(free, entity)
+                &BTreeSet::from_iter(free.clone())
+                    .union(&BTreeSet::from_iter(entity_free(entity).iter().cloned()))
+                    .cloned()
+                    .collect::<Vec<Name>>()
             ),
             _ => entity.clone()
         }
@@ -335,7 +329,10 @@ impl EntityType for Set {
                           .iter()
                           .map(|child| child.apply(
                                 entity,
-                              &union_maybe_name(free, entity)
+                                &BTreeSet::from_iter(free.clone())
+                                    .union(&BTreeSet::from_iter(entity_free(entity).iter().cloned()))
+                                    .cloned()
+                                    .collect::<Vec<Name>>()
                             ))
                           .collect()
         }.into()
@@ -348,7 +345,10 @@ impl EntityType for Set {
                           .map(|child| child.replace(
                               a,
                               b,
-                              &union_maybe_name(free, &child)
+                              &BTreeSet::from_iter(free.clone())
+                                  .union(&BTreeSet::from_iter(entity_free(child).iter().cloned()))
+                                  .cloned()
+                                  .collect::<Vec<Name>>()
                           ))
                           .collect()
         }.into()
