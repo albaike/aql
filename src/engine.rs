@@ -203,7 +203,12 @@ impl EntityType for Operation {
     fn bound(&self) -> Names {
         match self.operator {
             Operator::Bind => {
-                BTreeSet::<Name>::from_iter(self.right.bound())
+                BTreeSet::<Name>::from_iter([
+                    match Box::into_inner(self.left.clone()) {
+                        EntityEnum::Name(n) => n,
+                        _ => panic!("Invalid left term on bind")
+                    }
+                ])
                 .union(&BTreeSet::<Name>::from_iter(self.right.bound()))
                 .cloned()
                 .collect::<Vec<Name>>()
@@ -537,7 +542,9 @@ mod tests {
                 Name::new(String::from("a")),
                 Name::new(String::from("b")),
             ]),
-            BTreeSet::new(),
+            BTreeSet::from([
+                Name::new(String::from("a"))
+            ]),
             EntityEnum::Operation(
                 Operation::new(
                     Operator::Bind,
